@@ -1207,7 +1207,7 @@ function advance(state,now){
 
 const AWAY_THRESHOLD=10*60*1000;
 function newWindow(state,start){
-  return {start,encounters:0,wins:0,gold:0,teamXp:0,reserveXp:0,firstRecruit:state.collection.length};
+  return {start,encounters:0,wins:0,gold:0,teamXp:0,reserveXp:0,firstRecruit:state.collection.length,recruitUids:[]};
 }
 function advanceWithPresence(state,now,observedAt=null){
   const window=state.awayWindow??=newWindow(state,state.clock);
@@ -1219,6 +1219,7 @@ function advanceWithPresence(state,now,observedAt=null){
       const entries=advance(state,Math.min(until,limit));
       for(const e of entries){
         if(e.sold){w.sold=(w.sold??0)+1;w.saleGold=(w.saleGold??0)+e.saleGold;}
+        if(e.recruit?.uid)(w.recruitUids??=[]).push(e.recruit.uid);
         w.encounters++;w.wins+=Number(e.won);w.gold+=e.gold;w.teamXp+=e.teamXp;w.reserveXp+=e.reserveXp;all.push(e);
       }
     }
@@ -1232,7 +1233,7 @@ function advanceWithPresence(state,now,observedAt=null){
     const seen=Math.min(now,observedAt);
     run(seen);
     if(seen-window.start>=AWAY_THRESHOLD){
-      (state.awayReports??=[]).push({...window,end:seen,lastRecruit:state.collection.length});
+      (state.awayReports??=[]).push({...window,recruitUids:[...(window.recruitUids??[])],end:seen,lastRecruit:state.collection.length});
     }
     state.awayWindow=newWindow(state,seen);
   }
@@ -1323,51 +1324,68 @@ function autoFormation(state, mode='power', now=Date.now()){
   if(!['power','balanced','area'].includes(mode)||!state.collection.length)return false;
   const enemyColor=worldOf(state).areas[state.area]?.color;
   const unitCost=u=>u.nen?2:1;
-  const scoreOf=u=>{
-    const base=unitPower(u);
-    if(mode!=='area'||!enemyColor)return base;
-    const c=CHARACTERS[u.id].color;
-    return base*affinity(c,enemyColor)/Math.sqrt(affinity(enemyColor,c));
-  };
-  const ranked=state.collection.map(u=>({u,cost:unitCost(u),score:scoreOf(u),role:CHARACTERS[u.id].role,tier:CHARACTERS[u.id].tier}))
-    .sort((a,b)=>b.score-a.score||b.u.xp-a.u.xp||b.tier-a.tier||a.u.serial-b.u.serial);
-  let chosen=[];
-  if(mode==='balanced'){
-    let budget=4;
-    const picked=new Set();
-    for(const role of ['Guardião','Combatente','Mágico','Suporte']){
-      const match=ranked.find(item=>item.role===role&&!picked.has(item.u.uid)&&item.cost<=budget);
-      if(match){chosen.push(match);picked.add(match.u.uid);budget-=match.cost;}
+  const areaFactor=c=>mode==='area'&&enemyColor?affinity(c.color,enemyColor)/Math.sqrt(affinity(enemyColor,c.color)):1;
+  const scoreWith=(u,leaderCard)=>unitPower(u,leaderCard)*areaFactor(CHARACTERS[u.id]);
+  const cmp=(a,b)=>b.score-a.score||b.u.xp-a.u.xp||b.tier-a.tier||a.u.serial-b.u.serial;
+  // Best representative per (character.id, cost) as candidate leader.
+  const leaderMap=new Map();
+  for(const u of state.collection){
+    const c=CHARACTERS[u.id],cost=unitCost(u),key=`${u.id}:${cost}`;
+    const item={u,cost,score:scoreWith(u,c),role:c.role,tier:c.tier};
+    const prev=leaderMap.get(key);
+    if(!prev||cmp(item,prev)<0)leaderMap.set(key,item);
+  }
+  let best=null;
+  for(const lead of leaderMap.values()){
+    const leaderCard=CHARACTERS[lead.u.id];
+    const rem=4-lead.cost;
+    const others=[];
+    for(const u of state.collection){
+      if(u.uid===lead.u.uid)continue;
+      const cost=unitCost(u);
+      if(cost>rem)continue;
+      const c=CHARACTERS[u.id];
+      others.push({u,cost,score:scoreWith(u,leaderCard),role:c.role,tier:c.tier});
     }
-    for(const item of ranked){
-      if(budget<=0)break;
-      if(!picked.has(item.u.uid)&&item.cost<=budget){chosen.push(item);picked.add(item.u.uid);budget-=item.cost;}
+    others.sort(cmp);
+    let combo=[lead];
+    if(mode==='balanced'){
+      let budget=rem;
+      const rolesUsed=new Set([lead.role]);
+      const picked=new Set([lead.u.uid]);
+      for(const role of ['Guardião','Combatente','Mágico','Suporte']){
+        if(rolesUsed.has(role))continue;
+        const match=others.find(x=>x.role===role&&!picked.has(x.u.uid)&&x.cost<=budget);
+        if(match){combo.push(match);picked.add(match.u.uid);rolesUsed.add(role);budget-=match.cost;}
+      }
+      for(const x of others){
+        if(budget<=0)break;
+        if(!picked.has(x.u.uid)&&x.cost<=budget){combo.push(x);picked.add(x.u.uid);budget-=x.cost;}
+      }
+    }else{
+      const singles=others.filter(x=>x.cost===1).slice(0,rem);
+      const doubles=others.filter(x=>x.cost===2).slice(0,Math.floor(rem/2));
+      let bestSub=-1;
+      for(let d=0;d<=doubles.length;d++){
+        const candidate=[lead,...doubles.slice(0,d),...singles.slice(0,rem-d*2)];
+        const total=candidate.reduce((s,x)=>s+x.score,0);
+        if(total>bestSub){bestSub=total;combo=candidate;}
+      }
     }
-  }else{
-    const singles=ranked.filter(x=>x.cost===1).slice(0,4);
-    const doubles=ranked.filter(x=>x.cost===2).slice(0,2);
-    let bestScore=-1;
-    for(let d=0;d<=doubles.length;d++){
-      const sCount=Math.min(singles.length,4-d*2);
-      const combo=[...doubles.slice(0,d),...singles.slice(0,sCount)];
-      const total=combo.reduce((sum,x)=>sum+x.score,0);
-      if(total>bestScore){bestScore=total;chosen=combo;}
+    const score=combo.reduce((s,x)=>s+x.score,0);
+    const roles=mode==='balanced'?new Set(combo.map(x=>x.role)).size:0;
+    if(!best||roles>best.roles||(roles===best.roles&&score>best.score+1e-9)){
+      best={combo,lead:lead.u,score,roles};
     }
   }
-  if(!chosen.length)return false;
-  chosen.sort((a,b)=>(ROLE_ORDER[a.role]??9)-(ROLE_ORDER[b.role]??9)||b.score-a.score);
-  const units=chosen.map(x=>x.u);
-  let bestLeader=units[0],bestLeaderTotal=-1;
-  for(const cand of units){
-    const leaderCard=CHARACTERS[cand.id];
-    const total=units.reduce((sum,u)=>sum+unitPower(u,leaderCard),0);
-    if(total>bestLeaderTotal){bestLeaderTotal=total;bestLeader=cand;}
-  }
+  if(!best)return false;
+  best.combo.sort((a,b)=>(ROLE_ORDER[a.role]??9)-(ROLE_ORDER[b.role]??9)||b.score-a.score);
+  const units=best.combo.map(x=>x.u);
   const wasEmpty=!state.team.length;
   const slots=Array.from({length:4},(_,i)=>units[i]?.uid??null);
   state.slots=slots;
   state.team=slots.filter(Boolean);
-  state.leader=bestLeader.uid;
+  state.leader=best.lead.uid;
   applyFormationPreset(state,'padrao');
   if(wasEmpty&&!state.pending)state.nextAt=now;
   return true;
@@ -1385,6 +1403,13 @@ function sellUnit(state, uid){
   state.gold+=gold;
   delete state.positions?.[uid];
   if(state.recovery)delete state.recovery[uid];
+  if(state.awayWindow&&index<state.awayWindow.firstRecruit)state.awayWindow.firstRecruit--;
+  if(Array.isArray(state.awayReports)){
+    for(const r of state.awayReports){
+      if(index<r.firstRecruit)r.firstRecruit--;
+      if(index<r.lastRecruit)r.lastRecruit--;
+    }
+  }
   return gold;
 }
 
@@ -2077,7 +2102,8 @@ function showAway(){
     renderedReport=String(r.start)+'/'+r.end;
     const minutes=Math.floor((r.end-r.start)/60000);
     $('#away-time').textContent=(minutes>=60?Math.floor(minutes/60)+' h ':'')+(minutes%60)+' min de ausência'+(minutes>720?' · limite de exploração de 12 h':'');
-    const recruits=state.collection.slice(r.firstRecruit,r.lastRecruit);
+    const byUid=new Map(state.collection.map(u=>[u.uid,u]));
+    const recruits=Array.isArray(r.recruitUids)?r.recruitUids.map(uid=>byUid.get(uid)).filter(Boolean):state.collection.slice(r.firstRecruit,r.lastRecruit);
     $('#away-stats').innerHTML=[[r.encounters,'Encontros'],[r.wins,'Vitórias'],[recruits.length,'Mantidos na coleção'],[r.sold??0,'Cópias vendidas'],[r.saleGold??0,'Ouro de vendas (incluído no total)'],[r.gold,'Ouro'],[r.teamXp,'XP dos titulares'],[r.reserveXp,'XP dos reservas']].map(([v,label])=>`<div><strong>${int.format(v)}</strong><small>${label}</small></div>`).join('');
     $('#away-recruits').innerHTML=recruits.length?recruits.map(u=>{
       const c=CHARACTERS[u.id];return `<li style="--tone:${COLORS[c.color]}">${img(spriteFor(u))}<strong>${c.name}${u.shiny?' ✦':''}</strong><small>${TIERS[c.tier-1]} · ${serial(u)}</small></li>`;
@@ -2086,6 +2112,7 @@ function showAway(){
   if(!dialog.open)dialog.showModal();
 }
 function transaction(action,offline=false){
+  let ok=false;
   function commit(){
     if(!storageFailed)state=load()??state;
     if(blockedCampaign){note(storageIssue);return;}
@@ -2094,9 +2121,11 @@ function transaction(action,offline=false){
     const entries=advanceWithPresence(state,now,lastObservation);
     const lastEntry=entries.at(-1);
     if(previousBattle&&lastEntry?.end===previousBattle.end)finishedBattle={battle:previousBattle,entry:lastEntry};
-    const changed=applyGameAction(state,action,now)||entries.length;
+    const actionChanged=action?applyGameAction(state,action,now):false;
+    const changed=actionChanged||entries.length;
     if(action)entries.push(...advance(state,now));
     store();
+    ok=action?Boolean(actionChanged):true;
     if(changed&&!drag)renderPanel();
     if(profileUid)renderProfile();
     receive(entries,offline);
@@ -2114,6 +2143,7 @@ function transaction(action,offline=false){
         sentObservation=observed;
         serverOffset=data.now-Date.now();
         state=data.state;
+        ok=action?Boolean(data.changed):true;
         if(firstConnection){arenaRecovery=loadArenaRecovery();finishedBattle=null;stageKey='';}
         if(data.finished)finishedBattle=data.finished;
         if((firstConnection||data.changed||data.entries.length||previous.gold!==state.gold)&&!drag)renderPanel();
@@ -2128,6 +2158,7 @@ function transaction(action,offline=false){
     } finally{busy=false;showAway();}
   });
   transactionQueue=next.catch(error=>{
+    ok=false;
     if(error.status===401&&community?.active()){
       community.clear();
       state=load()??fresh(Date.now());
@@ -2136,7 +2167,7 @@ function transaction(action,offline=false){
     }
     note(error.message||'Não foi possível atualizar o progresso.');
   });
-  return transactionQueue;
+  return transactionQueue.then(()=>ok);
 }
 
 function unitSummary(unit){
@@ -2263,10 +2294,19 @@ function tacticalHints(){
   if(covered.size)tags.push(`<span class="hint-chip info">Cobertura ativa em ${covered.size} aliado(s)</span>`);
   return `<div class="tactical-hints">${tags.join('')}</div>`;
 }
+let collectionIndex=null;
+function getCollectionIndex(){
+  if(collectionIndex)return collectionIndex;
+  collectionIndex=state.collection.map((unit,idx)=>{
+    const c=CHARACTERS[unit.id];
+    return {unit,idx,c,power:unitPower(unit),level:levelAt(unit.xp),searchKey:`${c.name} ${c.universe} ${unit.trait??''}`.toLowerCase()};
+  });
+  return collectionIndex;
+}
 function filteredCollection(){
   const q=colFilter.search.trim().toLowerCase();
-  const list=state.collection.map((unit,idx)=>({unit,idx,c:CHARACTERS[unit.id],power:unitPower(unit),level:levelAt(unit.xp)})).filter(({unit,c})=>{
-    if(q&&!c.name.toLowerCase().includes(q)&&!c.universe.toLowerCase().includes(q)&&!(unit.trait??'').toLowerCase().includes(q))return false;
+  const list=getCollectionIndex().filter(({unit,c,searchKey})=>{
+    if(q&&!searchKey.includes(q))return false;
     if(colFilter.role&&c.role!==colFilter.role)return false;
     if(colFilter.tier&&c.tier!==Number(colFilter.tier))return false;
     if(colFilter.shiny&&!unit.shiny)return false;
@@ -2286,11 +2326,13 @@ function renderCollectionGrid(){
   const slots=formationSlots(state);
   const index=pickSlot??(slots.includes(null)?slots.indexOf(null):3);
   const items=filteredCollection();
+  const teamSet=new Set(state.team);
+  const allowSell=state.collection.length>1;
   const countEl=$('#collection-filtered-count');
   if(countEl)countEl.textContent=items.length===state.collection.length?`${state.collection.length} personagens recrutados`:`Mostrando ${items.length} de ${state.collection.length} personagens`;
   grid.innerHTML=items.length?items.map(({unit,c,power})=>{
-    const inTeam=state.team.includes(unit.uid);
-    const sellable=canSellUnit(state,unit.uid);
+    const inTeam=teamSet.has(unit.uid);
+    const sellable=allowSell&&!inTeam;
     const price=SALE_PRICES[c.tier-1]??0;
     return `<div class="collection-card" style="--tone:${COLORS[c.color]}"><button class="character-hit" data-profile="${unit.uid}">${unitSummary(unit)}</button><p class="collection-meta"><span class="role-pill">${c.role}</span> <span class="power-pill">Força ${int.format(power)}</span>${unit.trait?` <span class="trait-pill">${unit.trait}</span>`:''}</p><p>${c.skill} · ${c.universe}</p><div class="collection-actions"><button class="ghost" data-equip="${unit.uid}" data-slot="${index}" data-occupant="${slots[index]??''}" ${inTeam?'disabled':''}>${inTeam?'Na equipe':slots[index]?'Substituir na vaga '+(index+1):'Colocar na vaga '+(index+1)}</button>${sellable?`<button class="ghost sell-btn" data-sell="${unit.uid}">Vender (+${int.format(price)})</button>`:''}</div></div>`;
   }).join(''):'<p class="caption">Nenhum personagem encontrado com os filtros selecionados.</p>';
@@ -2301,6 +2343,7 @@ function floatTag(target,text,cls=''){
   target.append(hit);setTimeout(()=>hit.remove(),780);
 }
 function renderPanel(){
+  collectionIndex=null;
   $('#gold').textContent=int.format(state.gold);
   $('#wins').textContent=int.format(state.wins);
   $('#collection-count').textContent=state.collection.length;
@@ -2500,7 +2543,7 @@ document.addEventListener('click',e=>{
   if(b.id==='duel-train'){duel=null;rival=null;renderPanel();}
   if(b.id==='explore-toggle')void transaction({type:state.paused?'resume':'pause'});
   if(b.id==='auto-form-btn'){
-    void transaction({type:'autoFormation',mode:autoFormMode}).then(()=>note('Formação atualizada.'));
+    void transaction({type:'autoFormation',mode:autoFormMode}).then(ok=>{if(ok)note('Formação atualizada.');});
   }
   if(b.dataset.preset)void transaction({type:'formationPreset',preset:b.dataset.preset});
   if(b.dataset.sell){
@@ -2509,7 +2552,7 @@ document.addEventListener('click',e=>{
       const c=CHARACTERS[u.id],price=SALE_PRICES[c.tier-1]??0;
       const valuable=u.shiny||!!u.trait||c.tier>=3;
       if(!valuable||confirm(`Vender ${c.name}${u.shiny?' Shiny':''}${u.trait?` (${u.trait})`:''} ${serial(u)} por ${int.format(price)} ouro?`)){
-        void transaction({type:'sell',uid:u.uid}).then(()=>note(`${c.name} ${serial(u)} vendido por +${int.format(price)} ouro.`));
+        void transaction({type:'sell',uid:u.uid}).then(ok=>{if(ok)note(`${c.name} ${serial(u)} vendido por +${int.format(price)} ouro.`);});
       }
     }
   }
