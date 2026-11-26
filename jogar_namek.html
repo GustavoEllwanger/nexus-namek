@@ -1209,7 +1209,23 @@ const AWAY_THRESHOLD=10*60*1000;
 function newWindow(state,start){
   return {start,encounters:0,wins:0,gold:0,teamXp:0,reserveXp:0,firstRecruit:state.collection.length,recruitUids:[]};
 }
+function hydrateAwayRecruits(state){
+  if(state.awayWindow&&!Array.isArray(state.awayWindow.recruitUids)){
+    const start=Number.isInteger(state.awayWindow.firstRecruit)?Math.max(0,state.awayWindow.firstRecruit):state.collection.length;
+    state.awayWindow.recruitUids=state.collection.slice(start).map(u=>u.uid);
+  }
+  if(Array.isArray(state.awayReports)){
+    for(const r of state.awayReports){
+      if(r&&!Array.isArray(r.recruitUids)){
+        const start=Number.isInteger(r.firstRecruit)?Math.max(0,r.firstRecruit):state.collection.length;
+        const end=Number.isInteger(r.lastRecruit)?Math.max(start,r.lastRecruit):start;
+        r.recruitUids=state.collection.slice(start,end).map(u=>u.uid);
+      }
+    }
+  }
+}
 function advanceWithPresence(state,now,observedAt=null){
+  hydrateAwayRecruits(state);
   const window=state.awayWindow??=newWindow(state,state.clock);
   const all=[];
   function run(until){
@@ -1350,18 +1366,25 @@ function autoFormation(state, mode='power', now=Date.now()){
     others.sort(cmp);
     let combo=[lead];
     if(mode==='balanced'){
-      let budget=rem;
-      const rolesUsed=new Set([lead.role]);
-      const picked=new Set([lead.u.uid]);
-      for(const role of ['Guardião','Combatente','Mágico','Suporte']){
-        if(rolesUsed.has(role))continue;
-        const match=others.find(x=>x.role===role&&!picked.has(x.u.uid)&&x.cost<=budget);
-        if(match){combo.push(match);picked.add(match.u.uid);rolesUsed.add(role);budget-=match.cost;}
-      }
-      for(const x of others){
-        if(budget<=0)break;
-        if(!picked.has(x.u.uid)&&x.cost<=budget){combo.push(x);picked.add(x.u.uid);budget-=x.cost;}
-      }
+      const buildBalanced=pool=>{
+        let budget=rem;
+        const cand=[lead];
+        const rolesUsed=new Set([lead.role]);
+        const picked=new Set([lead.u.uid]);
+        for(const role of ['Guardião','Combatente','Mágico','Suporte']){
+          if(rolesUsed.has(role))continue;
+          const match=pool.find(x=>x.role===role&&!picked.has(x.u.uid)&&x.cost<=budget);
+          if(match){cand.push(match);picked.add(match.u.uid);rolesUsed.add(role);budget-=match.cost;}
+        }
+        for(const x of pool){
+          if(budget<=0)break;
+          if(!picked.has(x.u.uid)&&x.cost<=budget){cand.push(x);picked.add(x.u.uid);budget-=x.cost;}
+        }
+        return {cand,roles:rolesUsed.size,score:cand.reduce((s,x)=>s+x.score,0)};
+      };
+      const withAny=buildBalanced(others);
+      const singlesOnly=buildBalanced(others.filter(x=>x.cost===1));
+      combo=singlesOnly.roles>withAny.roles||(singlesOnly.roles===withAny.roles&&singlesOnly.score>withAny.score+1e-9)?singlesOnly.cand:withAny.cand;
     }else{
       const singles=others.filter(x=>x.cost===1).slice(0,rem);
       const doubles=others.filter(x=>x.cost===2).slice(0,Math.floor(rem/2));
@@ -1397,6 +1420,7 @@ function canSellUnit(state, uid){
 }
 function sellUnit(state, uid){
   if(!canSellUnit(state,uid))return false;
+  hydrateAwayRecruits(state);
   const index=state.collection.findIndex(u=>u.uid===uid);
   const [unit]=state.collection.splice(index,1);
   const gold=SALE_PRICES[CHARACTERS[unit.id].tier-1]??0;
@@ -1451,9 +1475,11 @@ function applyGameAction(state,action,now){
     }
     case 'pause':
       state.running=false;state.paused=true;return true;
-    case 'resume':
+    case 'resume': {
+      const wasPaused=Boolean(state.paused);
       state.paused=false;
-      return startExploration(state,now);
+      return startExploration(state,now)||wasPaused;
+    }
     case 'autoRoutes':
       state.autoRoutes=action.enabled===true;return true;
     case 'world':
@@ -1905,6 +1931,7 @@ const validTabs=['exploracao','formacao','colecao','configuracoes','upgrades','c
 const time = milliseconds=>{const sec=Math.max(0,Math.ceil(milliseconds/1000));return `${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`;};
 const copy=id=>state.collection.find(c=>c.uid===id);
 const card=id=>CHARACTERS[copy(id).id];
+const isPaused=()=>Boolean(state.paused??!state.running);
 let preferences={motion:true,numbers:true};
 try{preferences={...preferences,...JSON.parse(localStorage.getItem('nexus.display')||'{}')};}catch{}
 document.documentElement.dataset.motion=preferences.motion?'on':'off';
@@ -2048,9 +2075,9 @@ const community=createCommunity({spriteURL,onChallenge(profile){
 const serial=unit=>`#${String(unit.serial).padStart(3,'0')}`;
 const statLabels={hp:'PV',attack:'Ataque',magic:'Magia',defense:'Defesa',resistance:'Resistência',speed:'Velocidade'};
 function store(){
-  if(storageIssue){note(storageIssue);return;}
-  try {writeCampaign(localStorage,state);storageFailed=false;}
-  catch{storageFailed=true;note('Não foi possível salvar neste navegador. Exporte seu progresso em Configurações.');}
+  if(storageIssue){note(storageIssue);return false;}
+  try {writeCampaign(localStorage,state);storageFailed=false;return true;}
+  catch{storageFailed=true;note('Não foi possível salvar neste navegador. Exporte seu progresso em Configurações.');return false;}
 }
 async function exportCampaign(){
   await transaction(null);
@@ -2124,11 +2151,11 @@ function transaction(action,offline=false){
     const actionChanged=action?applyGameAction(state,action,now):false;
     const changed=actionChanged||entries.length;
     if(action)entries.push(...advance(state,now));
-    store();
-    ok=action?Boolean(actionChanged):true;
+    const saved=store();
+    ok=saved&&(action?Boolean(actionChanged):true);
     if(changed&&!drag)renderPanel();
     if(profileUid)renderProfile();
-    receive(entries,offline);
+    if(saved)receive(entries,offline);
   }
   const next=transactionQueue.then(async()=>{
     busy=true;
@@ -2399,9 +2426,16 @@ function renderPanel(){
   }else if(tab==='colecao'){
     const slots=formationSlots(state);
     const index=pickSlot??(slots.includes(null)?slots.indexOf(null):3);
-    panel.innerHTML=`<article class="card"><div class="swap"><div><h2>Coleção</h2><p class="caption" id="collection-filtered-count"></p></div><label>Vaga de destino <select id="swap-target">${slots.map((uid,i)=>`<option value="${i}" ${index===i?'selected':''}>${i+1} · ${uid?card(uid).name:'Vazia'}</option>`).join('')}</select></label></div>
-    <div class="collection-filters"><label class="search-field"><span>Buscar</span><input type="search" id="col-search" placeholder="Nome, universo ou trait" value="${colFilter.search.replace(/"/g,'&quot;')}"></label><select id="col-sort" aria-label="Ordenar coleção"><option value="power" ${colFilter.sort==='power'?'selected':''}>Maior força</option><option value="level" ${colFilter.sort==='level'?'selected':''}>Maior nível</option><option value="tier" ${colFilter.sort==='tier'?'selected':''}>Maior raridade</option><option value="recent" ${colFilter.sort==='recent'?'selected':''}>Mais recente</option></select><select id="col-role" aria-label="Filtrar por função"><option value="">Todas funções</option>${['Guardião','Combatente','Mágico','Suporte'].map(r=>`<option value="${r}" ${colFilter.role===r?'selected':''}>${r}</option>`).join('')}</select><select id="col-tier" aria-label="Filtrar por raridade"><option value="">Todas raridades</option>${TIERS.map((t,i)=>`<option value="${i+1}" ${colFilter.tier===String(i+1)?'selected':''}>${t}</option>`).join('')}</select><label class="filter-check"><input type="checkbox" id="col-shiny" ${colFilter.shiny?'checked':''}> Shiny</label><label class="filter-check"><input type="checkbox" id="col-trait" ${colFilter.trait?'checked':''}> Com Trait</label></div>
+    const slotOptions=slots.map((uid,i)=>`<option value="${i}" ${index===i?'selected':''}>${i+1} · ${uid?card(uid).name:'Vazia'}</option>`).join('');
+    if(panel.querySelector('#collection-list')){
+      const target=panel.querySelector('#swap-target');
+      if(target){target.innerHTML=slotOptions;target.value=String(index);}
+    }else{
+      const searchValue=colFilter.search.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+      panel.innerHTML=`<article class="card"><div class="swap"><div><h2>Coleção</h2><p class="caption" id="collection-filtered-count"></p></div><label>Vaga de destino <select id="swap-target">${slotOptions}</select></label></div>
+    <div class="collection-filters"><label class="search-field"><span>Buscar</span><input type="search" id="col-search" placeholder="Nome, universo ou trait" value="${searchValue}"></label><select id="col-sort" aria-label="Ordenar coleção"><option value="power" ${colFilter.sort==='power'?'selected':''}>Maior força</option><option value="level" ${colFilter.sort==='level'?'selected':''}>Maior nível</option><option value="tier" ${colFilter.sort==='tier'?'selected':''}>Maior raridade</option><option value="recent" ${colFilter.sort==='recent'?'selected':''}>Mais recente</option></select><select id="col-role" aria-label="Filtrar por função"><option value="">Todas funções</option>${['Guardião','Combatente','Mágico','Suporte'].map(r=>`<option value="${r}" ${colFilter.role===r?'selected':''}>${r}</option>`).join('')}</select><select id="col-tier" aria-label="Filtrar por raridade"><option value="">Todas raridades</option>${TIERS.map((t,i)=>`<option value="${i+1}" ${colFilter.tier===String(i+1)?'selected':''}>${t}</option>`).join('')}</select><label class="filter-check"><input type="checkbox" id="col-shiny" ${colFilter.shiny?'checked':''}> Shiny</label><label class="filter-check"><input type="checkbox" id="col-trait" ${colFilter.trait?'checked':''}> Com Trait</label></div>
     <div class="collection-grid" id="collection-list"></div></article>`;
+    }
     renderCollectionGrid();
   }else if(tab==='guia'){
     panel.innerHTML=`<article class="card guide"><h2>Guia de combate</h2>${colorChart()}
@@ -2414,7 +2448,7 @@ function renderPanel(){
     panel.innerHTML=`<article class="card settings"><h2>Configurações</h2>
       <h3>Progresso da campanha</h3>${community?.active()?'<p class="caption">Sua conta salva no servidor. Guarde o código de acesso privado em Meu perfil.</p>':`<p class="caption">${storageIssue||storageFailed?'Salvamento local indisponível.':'Salvamento automático neste navegador.'} ${location.protocol==='file:'?'Para atualizar o HTML, mantenha o mesmo nome, pasta e navegador. ':''}Use um backup para continuar em outro arquivo ou dispositivo.</p>
       <button type="button" id="export-save">Exportar backup</button> <button type="button" id="import-save">Importar backup</button>`}
-      <label><input type="checkbox" id="auto-play" ${!state.paused?'checked':''}> Exploração automática</label><p class="caption">Parar conclui a luta em andamento e suspende os próximos encontros, inclusive AFK.</p>
+      <label><input type="checkbox" id="auto-play" ${!isPaused()?'checked':''}> Exploração automática</label><p class="caption">Parar conclui a luta em andamento e suspende os próximos encontros, inclusive AFK.</p>
       <label><input type="checkbox" id="auto-routes" ${state.autoRoutes?'checked':''}> Avançar de área ao atingir o nível necessário</label><p class="caption">Escolher uma área manualmente fixa a rota atual.</p>
       <h3>Venda automática de cópias</h3><label><input type="checkbox" data-sale="enabled" ${sale.enabled?'checked':''}> Vender novas cópias selecionadas</label>
       <p class="caption">Escolha raridades ou personagens. A primeira cópia de cada combinação de personagem, versão normal ou Shiny e trait fica na coleção. A venda só acontece quando outra cópia igual é recrutada.</p>
@@ -2510,11 +2544,12 @@ function drawScene(now){
   $('#arena-time').textContent=time(activeBattle?elapsed:recovering?recoverAt-now:waiting?state.nextAt-now:0);
   $('#arena-label').textContent=finish?(finish.entry.won?`+${int.format(finish.entry.gold)} ouro · +${finish.entry.xp} XP por titular${finish.entry.reserveXp?` · +${finish.entry.reserveXp} XP entre reservas`:''}`:`Derrota contra ${battle.enemy.name}`):battle?`Enfrentando ${battle.enemy.name}`:recovering?'Aguardando a recuperação da equipe.':waiting?'O time está procurando um adversário.':state.team.length?'Exploração parada. Clique em Explorar para retomar.':'Coloque um personagem na formação para explorar.';
   $('#fight-progress').style.width=`${battle?100*elapsed/duration:waiting?Math.max(0,Math.min(100,100*(1-(state.nextAt-now)/(state.waitDuration||waitFor(state))))):0}%`;
+  const paused=isPaused();
   const toggle=$('#explore-toggle');
   toggle.hidden=false;
-  toggle.textContent=state.paused?'Explorar':'Parar exploração';
-  toggle.dataset.mode=state.paused?'resume':'pause';
-  toggle.disabled=!!state.paused&&!state.team.length;
+  toggle.textContent=paused?'Explorar':'Parar exploração';
+  toggle.dataset.mode=paused?'resume':'pause';
+  toggle.disabled=paused&&!state.team.length;
 }
 
 function openUnit(uid,button){
@@ -2541,7 +2576,7 @@ document.addEventListener('click',e=>{
   }
   if(b.id==='duel-start')startDuel();
   if(b.id==='duel-train'){duel=null;rival=null;renderPanel();}
-  if(b.id==='explore-toggle')void transaction({type:state.paused?'resume':'pause'});
+  if(b.id==='explore-toggle')void transaction({type:isPaused()?'resume':'pause'});
   if(b.id==='auto-form-btn'){
     void transaction({type:'autoFormation',mode:autoFormMode}).then(ok=>{if(ok)note('Formação atualizada.');});
   }
@@ -2562,8 +2597,8 @@ document.addEventListener('click',e=>{
   if(b.dataset.vaga!==undefined){pickSlot=Number(b.dataset.vaga);tab='colecao';history.replaceState(null,'','#colecao');renderPanel();}
   if(b.dataset.equip){
     const uid=b.dataset.equip,slot=Number(b.dataset.slot);
-    void transaction({type:'equip',uid,slot,replaced:b.dataset.occupant||null}).then(()=>{
-      if(formationSlots(state)[slot]===uid&&tab==='colecao'){pickSlot=null;tab='formacao';history.replaceState(null,'','#formacao');renderPanel();}
+    void transaction({type:'equip',uid,slot,replaced:b.dataset.occupant||null}).then(ok=>{
+      if(ok&&formationSlots(state)[slot]===uid&&tab==='colecao'){pickSlot=null;tab='formacao';history.replaceState(null,'','#formacao');renderPanel();}
     });
   }
   if(b.dataset.action==='boss')void transaction({type:'boss'});
