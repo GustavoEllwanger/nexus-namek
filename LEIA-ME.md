@@ -22,7 +22,7 @@ O banco padrão fica em `data/nexus.sqlite`. O ouro, o inventário, os encontros
 
 ## Jogo solo e campanha
 
-Para jogar solo, abra `jogar_namek.html` no navegador. O progresso solo é local e fica separado da conta online. Use o mesmo arquivo e navegador para continuar o save anterior.
+Para jogar solo, abra `jogar_namek.html` no navegador. O progresso solo é local e fica separado da conta online. Para atualizar, feche o jogo e substitua o HTML mantendo o nome, a pasta e o perfil do navegador. Em **Configurações → Progresso da campanha → Exportar backup**, você pode baixar a campanha em JSON. Para mudar de arquivo, navegador ou dispositivo, abra a nova build e escolha **Importar backup**. Se o save antigo só aparecer na versão anterior, coloque a build atualizada exatamente no caminho daquela versão para acessar o mesmo armazenamento.
 
 A equipe já começa explorando ao abrir o jogo ou criar a conta online. O retorno contabiliza até 12 horas de ausência e a exploração continua. **Parar exploração** conclui a luta atual e suspende os próximos encontros, mesmo após fechar o jogo. Para reativar, marque **Exploração automática** em **Configurações**.
 

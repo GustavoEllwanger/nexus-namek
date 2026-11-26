@@ -177,6 +177,7 @@ html[data-motion="off"] .arena *{animation:none!important;transition:none!import
   </main>
   <footer>Campanha dos mundos <span>·</span> Exploração automática</footer>
 </div>
+<input type="file" hidden id="save-file" accept=".json,application/json">
 <dialog id="away-dialog" class="away-dialog" aria-labelledby="away-title">
   <header><p class="smallcaps">EXPLORAÇÃO AFK</p><h2 id="away-title">Boas-vindas de volta!</h2><p id="away-time"></p></header>
   <div id="away-stats"></div><h3>Personagens recrutados</h3><ul id="away-recruits"></ul>
@@ -1621,10 +1622,85 @@ function createCommunity({spriteURL,onSession,onChallenge}){
 }
 
 return {createCommunity};
-})();
-const {affinity}=engine; const {createCommunity}=communityModule;
+})();const saveModule = (()=>{
 
 const saveKey = 'nexus.namek.v1';
+const previousKey = saveKey + '.anterior';
+
+class UnreadableCampaign extends Error {}
+
+function isUnreadableCampaign(error) { return error instanceof UnreadableCampaign; }
+
+function parseCampaign(raw) {
+  const s = JSON.parse(raw);
+  if (s?.version !== 1 || !Number.isFinite(s.clock) || !Number.isFinite(s.created) ||
+      !Number.isFinite(s.nextAt) || !Number.isFinite(s.gold) || !s.positions ||
+      !Array.isArray(s.team) || !Array.isArray(s.collection) || !s.collection.length ||
+      !Array.isArray(s.log)) throw Error('Dados da campanha inválidos.');
+  return s;
+}
+
+function readCampaign(storage) {
+  const raw = storage.getItem(saveKey);
+  if (raw !== null) {
+    // A newer format belongs to a newer build. Preserve it until that build opens it.
+    let version;
+    try { version = JSON.parse(raw)?.version; } catch {}
+    if (typeof version === 'number' && version > 1) throw new UnreadableCampaign('Este progresso exige uma versão mais recente do jogo.');
+    try { return parseCampaign(raw); } catch {}
+  }
+  const previous = storage.getItem(previousKey);
+  if (previous !== null) {
+    try { return parseCampaign(previous); } catch { throw new UnreadableCampaign('O save local está danificado. Importe um backup para restaurá-lo.'); }
+  }
+  if (raw !== null) throw new UnreadableCampaign('O save local está danificado. Importe um backup para restaurá-lo.');
+  return null;
+}
+
+function writeCampaign(storage, state) {
+  const next = JSON.stringify(state);
+  const current = storage.getItem(saveKey);
+  if (current === next) return;
+  // Keep the last readable checkpoint. Its failure must not block the main save.
+  if (current !== null) {
+    try { parseCampaign(current); storage.setItem(previousKey, current); } catch {}
+  }
+  try { storage.setItem(saveKey, next); }
+  catch (error) {
+    if (error.name !== 'QuotaExceededError' || !current || !storage.getItem(previousKey)) throw error;
+    // Remove the extra checkpoint only when the primary is itself readable.
+    parseCampaign(current);
+    storage.removeItem(previousKey);
+    storage.setItem(saveKey, next);
+  }
+}
+
+function packCampaign(state) {
+  return JSON.stringify({game:'nexus-namek', format:1, campaign:state});
+}
+
+function unpackCampaign(text, characters, worlds) {
+  const file = JSON.parse(text, (key, value) => {
+    if (['__proto__','prototype','constructor'].includes(key) ||
+        typeof value === 'string' && /[<>"&]/.test(value)) throw Error('Conteúdo inválido no backup.');
+    return value;
+  });
+  if (file?.game !== 'nexus-namek' || file.format !== 1) throw Error('Escolha um backup de campanha do Nexus.');
+  const s = parseCampaign(JSON.stringify(file.campaign));
+  const ids = new Set(s.collection.map(u => u.uid));
+  const validUnit = u => Object.hasOwn(characters, u.id) && /^[\w-]+$/.test(u.uid) && Number.isFinite(u.xp);
+  const world = worlds[s.world ?? 0];
+  if (!world?.areas[s.area] || !s.collection.every(validUnit) || ids.size !== s.collection.length ||
+      s.team.length > 4 || !s.team.every(uid => ids.has(uid)) || (s.leader && !ids.has(s.leader)) ||
+      (s.pending && (!Array.isArray(s.pending.result?.events) || !Array.isArray(s.pending.team) ||
+        !s.pending.enemy || !Number.isFinite(s.pending.end)))) throw Error('Campanha incompleta ou incompatível.');
+  return s;
+}
+
+return {saveKey,isUnreadableCampaign,readCampaign,writeCampaign,packCampaign,unpackCampaign};
+})();
+const {isUnreadableCampaign,saveKey,readCampaign,writeCampaign,packCampaign,unpackCampaign}=saveModule; const {affinity}=engine; const {createCommunity}=communityModule;
+
 const $ = selector=>document.querySelector(selector);
 const int = new Intl.NumberFormat('pt-BR');
 const validTabs=['exploracao','formacao','colecao','configuracoes','upgrades','comunidade','arena','guia'];
@@ -1638,11 +1714,19 @@ const sprites = {"ap-accelerator-shiny":"data:image/png;base64,iVBORw0KGgoAAAANS
 const img=(sprite,alt='')=>`<img src="${spriteURL(sprite)}" alt="${alt}">`;
 const note = text=> { const box=$('#notice');box.textContent=text;box.hidden=!text; };
 
+let storageIssue='';
+let blockedCampaign=false;
+let storageFailed=false;
 function load(){
-  try { const parsed=JSON.parse(localStorage.getItem(saveKey));if(parsed?.version===1&&Array.isArray(parsed.team)&&Array.isArray(parsed.collection))return parsed; } catch {}
-  return null;
+  try { const value=readCampaign(localStorage);storageIssue='';blockedCampaign=false;return value; }
+  catch(error){
+    blockedCampaign=isUnreadableCampaign(error);
+    storageIssue=blockedCampaign?error.message:'O navegador bloqueou o armazenamento. Exporte seu progresso em Configurações.';
+    return null;
+  }
 }
-let state=load()??fresh(Date.now(),crypto.getRandomValues(new Uint32Array(1))[0]);
+const initialSave=load();
+let state=initialSave??fresh(Date.now(),crypto.getRandomValues(new Uint32Array(1))[0]);
 let selected=state.team[0];
 let pickSlot=null;
 let tab=validTabs.includes(location.hash.slice(1))?location.hash.slice(1):'exploracao';
@@ -1765,8 +1849,34 @@ const community=createCommunity({spriteURL,onChallenge(profile){
 
 const serial=unit=>`#${String(unit.serial).padStart(3,'0')}`;
 const statLabels={hp:'PV',attack:'Ataque',magic:'Magia',defense:'Defesa',resistance:'Resistência',speed:'Velocidade'};
-let storageFailed=false;
-function store(){try {localStorage.setItem(saveKey,JSON.stringify(state));storageFailed=false;}catch{storageFailed=true;note('O navegador bloqueou o salvamento neste dispositivo.');}}
+function store(){
+  if(storageIssue){note(storageIssue);return;}
+  try {writeCampaign(localStorage,state);storageFailed=false;}
+  catch{storageFailed=true;note('Não foi possível salvar neste navegador. Exporte seu progresso em Configurações.');}
+}
+async function exportCampaign(){
+  await transaction(null);
+  if(community?.active())return;
+  const url=URL.createObjectURL(new Blob([packCampaign(state)],{type:'application/json'}));
+  const link=document.createElement('a');
+  link.href=url;link.download='nexus-progresso-'+new Date().toISOString().slice(0,10)+'.json';
+  link.click();setTimeout(()=>URL.revokeObjectURL(url),30000);
+}
+async function importCampaign(file){
+  if(!file||community?.active())return;
+  try{
+    const candidate=unpackCampaign(await file.text(),CHARACTERS,WORLDS);
+    const message=`Restaurar a campanha com ${int.format(candidate.gold)} ouro e ${candidate.collection.length} personagens? Isso substituirá o progresso solo aberto neste navegador.`;
+    if(!confirm(message))return;
+    const restore=()=>{
+      if(community?.active())return;
+      writeCampaign(localStorage,candidate);
+      location.reload();
+    };
+    transactionQueue=transactionQueue.then(()=>navigator.locks?navigator.locks.request(saveKey,restore):restore()).catch(()=>note('O navegador não conseguiu gravar o backup.'));
+    await transactionQueue;
+  }catch{note('Não foi possível ler este backup do Nexus. A campanha atual foi preservada.');}
+}
 function receive(entries,offline=false){
   if(!entries.length)return;
   if(state.awayReports?.length)return;
@@ -1805,6 +1915,7 @@ function showAway(){
 function transaction(action,offline=false){
   function commit(){
     if(!storageFailed)state=load()??state;
+    if(blockedCampaign){note(storageIssue);return;}
     const now=Date.now();
     const previousBattle=state.pending;
     const entries=advanceWithPresence(state,now,lastObservation);
@@ -1983,6 +2094,8 @@ function renderPanel(){
     const sale=state.autoSell??{},rule=sale.traitRules?.[saleTier]??{below:0,names:[]},traitsOpen=panel.querySelector('#sale-traits')?.open,open=panel.querySelector('#sale-characters')?.open;
 
     panel.innerHTML=`<article class="card settings"><h2>Configurações</h2>
+      <h3>Progresso da campanha</h3>${community?.active()?'<p class="caption">Sua conta salva no servidor. Guarde o código de acesso privado em Meu perfil.</p>':`<p class="caption">${storageIssue||storageFailed?'Salvamento local indisponível.':'Salvamento automático neste navegador.'} ${location.protocol==='file:'?'Para atualizar o HTML, mantenha o mesmo nome, pasta e navegador. ':''}Use um backup para continuar em outro arquivo ou dispositivo.</p>
+      <button type="button" id="export-save">Exportar backup</button> <button type="button" id="import-save">Importar backup</button>`}
       <label><input type="checkbox" id="auto-play" ${!state.paused?'checked':''}> Exploração automática</label><p class="caption">Parar conclui a luta em andamento e suspende os próximos encontros, inclusive AFK.</p>
       <label><input type="checkbox" id="auto-routes" ${state.autoRoutes?'checked':''}> Avançar de área ao atingir o nível necessário</label><p class="caption">Escolher uma área manualmente fixa a rota atual.</p>
       <h3>Venda automática de cópias</h3><label><input type="checkbox" data-sale="enabled" ${sale.enabled?'checked':''}> Vender novas cópias selecionadas</label>
@@ -2081,6 +2194,8 @@ function pulse(node,cls){
 
 document.addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b)return;
+  if(b.id==='export-save')void exportCampaign();
+  if(b.id==='import-save')$('#save-file').click();
   if(b.dataset.tab){tab=b.dataset.tab;pickSlot=null;history.replaceState(null,'',`#${tab}`);renderPanel();return;}
   if(b.dataset.nen){const u=copy(b.dataset.nen);if(u)void transaction({type:'nen',uid:u.uid,enabled:!u.nen});}
   if(b.dataset.color||b.dataset.mode){
@@ -2119,6 +2234,7 @@ $('#character-profile').addEventListener('close',()=>{
   profileOpener=null;
 });
 document.addEventListener('change',e=>{const target=e.target;
+  if(target.id==='save-file'){void importCampaign(target.files[0]);target.value='';return;}
   if(target.id==='swap-target'){pickSlot=Number(target.value);renderPanel();}
   if(target.id==='world-select')void transaction({type:'world',index:Number(target.value)});
   if(target.dataset.replace&&target.value)void transaction({type:'equip',uid:target.value,replaced:target.dataset.replace});
@@ -2175,6 +2291,9 @@ for(const event of ['pointerdown','keydown','pointermove','wheel'])document.addE
 addEventListener('focus',()=>{observe();void transaction(null,true);});
 $('#away-dialog').addEventListener('cancel',event=>{event.preventDefault();$('#away-continue').click();});
 $('#away-continue').addEventListener('click',()=>{const report=state.awayReports?.[0];if(report)void transaction({type:'dismissAway',end:report.end});});
+if(!initialSave&&!storageIssue&&!community?.active()&&location.protocol==='file:'){
+  note('Primeira campanha neste arquivo. Já jogava? Em Configurações, importe seu backup ou abra a atualização no caminho do HTML antigo.');
+}
 const wasAway=gameNow()-state.clock>=AWAY_THRESHOLD;
 void transaction(null,wasAway).then(()=>{renderPanel();drawScene(gameNow());});
 setInterval(()=>{
