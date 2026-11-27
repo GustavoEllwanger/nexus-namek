@@ -1025,7 +1025,7 @@ const position = [[72,47],[56,72],[39,28],[22,59]];
 const HOUR = 3600000;
 const UPGRADES = {
   ritmo:{name:'Ritmo de expedição',worlds:[1,2,4,6,8],costs:[120,1800,15000,80000,240000],values:[10,9,8,7,6,5],unit:' s',description:'Reduz a espera entre encontros.'},
-  sorte:{name:'Sorte',worlds:[1,1,1,2,3,5,7,8,10],costs:[50,125,300,1000,3500,12000,36000,90000,200000],values:[10,20,30,40,50,60,70,80,90,100],unit:'%',description:'Chance de encontrar um personagem recrutável em uma luta comum. Vença para recrutá-lo.'},
+  sorte:{name:'Sorte',worlds:[1,1,1,2,3,5,7,8,10],costs:[50,125,300,1000,3500,12000,36000,90000,200000],values:[10,20,30,40,50,60,70,80,90,100],unit:'%',description:'Até 50%, aumenta a chance de encontrar um recruta em lutas comuns. Cada ponto acima de 50% aumenta em 1% relativo a chance de esse recruta ser Raro ou superior.'},
   ouro:{name:'Bônus de ouro',worlds:[1,1,1,2,4,6,8],costs:[75,180,400,2000,18000,90000,250000],values:[0,10,20,30,35,40,45,50],unit:'%',description:'Acrescenta ouro às vitórias em encontros comuns e de elite.'},
   xp:{name:'Experiência compartilhada',worlds:[1,1,1,2,4,6,8],costs:[60,150,325,1600,14000,75000,210000],values:[0,25,40,60,70,80,90,100],unit:'%',description:'Distribui entre os reservas uma fração da XP que um titular recebe por vitória. Cada titular mantém sua recompensa integral.'},
   rastreio:{name:'Rastreio de raros',worlds:[1,2,4,6,9],costs:[100,600,4500,24000,100000],values:[18,20,24,28,32,36],unit:'%',description:'Chance de um recruta ser de raridade Rara ou superior. Cada uma dessas raridades recebe o mesmo aumento proporcional.'},
@@ -1112,10 +1112,15 @@ function recruitWeights(rarePercent){
     return i===1?weight:weight*rarePercent/base;
   });
 }
-function rollRecruit(random,chance=.10,universe='Dragon Ball',rarePercent=UPGRADES.rastreio.values[0]){
+function recruitRates(luckPercent,rastreioPercent){
+  return {encounter:Math.min(50,luckPercent),rare:rastreioPercent*(100+Math.max(0,luckPercent-50))/100};
+}
+function rollRecruit(random,luck=.10,universe='Dragon Ball',rarePercent=UPGRADES.rastreio.values[0]){
+  const rates=recruitRates(luck*100,rarePercent);
+  const chance=rates.encounter/100;
   if(random()>=chance) return null;
   let p=random(),tier=1;
-  const weights=recruitWeights(rarePercent);
+  const weights=recruitWeights(rates.rare);
   for(const weight of weights){if(p<weight)break;p-=weight;tier++;}
   tier=Math.min(tier,8);
   const candidates=Object.values(CHARACTERS).filter(c=>c.tier===tier);
@@ -1281,12 +1286,14 @@ function advance(state,now){
       state.nextAt=battle.end+state.waitDuration;
       state.running=!state.paused;
       if(state.destination!==undefined)travel(state,state.destination);
+      else if(state.autoRoutes && state.running && battle.boss && state.completed && state.world<state.unlocked)travel(state,state.world+1);
       continue;
     }
     if(!state.team.length||!state.running||state.nextAt>cap) break;
     const start=Math.max(state.nextAt,firstReady(state));
     if(start>cap)break;
-    state.pending=makeBattle(state,start);
+    if(state.autoRoutes && state.completed && state.world<state.unlocked)travel(state,state.world+1);
+    state.pending=makeBattle(state,start,!!state.autoRoutes && readyForBoss(state));
   }
   if(now>cap){
     if(state.pending){
@@ -1410,6 +1417,9 @@ function unitPower(unit, leader=null){
   const stats=fighter(unit,undefined,leader);
   return STAT_KEYS.reduce((sum,key)=>sum+stats[key],0);
 }
+function projectedPower(unit,leader=null){
+  return unitPower({...unit,xp:xpTo(100)},leader);
+}
 function leaderApplies(leader, member){
   return leaderBuff(leader,member).some(Boolean);
 }
@@ -1437,7 +1447,7 @@ function autoFormation(state, mode='power', now=Date.now()){
   const enemyColor=worldOf(state).areas[state.area]?.color;
   const unitCost=u=>u.nen?2:1;
   const areaFactor=c=>mode==='area'&&enemyColor?affinity(c.color,enemyColor)/Math.sqrt(affinity(enemyColor,c.color)):1;
-  const scoreWith=(u,leaderCard)=>unitPower(u,leaderCard)*areaFactor(CHARACTERS[u.id]);
+  const scoreWith=(u,leaderCard)=>projectedPower(u,leaderCard)*areaFactor(CHARACTERS[u.id]);
   const cmp=(a,b)=>b.score-a.score||b.u.xp-a.u.xp||b.tier-a.tier||a.u.serial-b.u.serial;
   // Best representative per (character.id, cost) as candidate leader.
   const leaderMap=new Map();
@@ -1580,6 +1590,7 @@ function applyGameAction(state,action,now){
       state.autoRoutes=action.enabled===true;return true;
     case 'world':
       if(!Number.isInteger(action.index)||action.index<0||action.index>state.unlocked)return false;
+      state.autoRoutes=false;
       if(state.pending)state.destination=action.index;else travel(state,action.index);
       return true;
     case 'area': {
@@ -1613,9 +1624,9 @@ function applyGameAction(state,action,now){
   }
 }
 
-return {AREAS,BOSS,WORLDS,worldOf,levelCap,COLORS,TIERS,spriteFor,CHARACTERS,SKILL_EFFECTS,TRAITS,UPGRADES,xpFor,levelAt,xpProgress,maxLevel,readyForBoss,upgradeLevel,waitFor,buyUpgrade,fresh,fighter,rollRecruit,SALE_PRICES,RECOVERY_MS,readyAt,makeBattle,saleSettings,advance,AWAY_THRESHOLD,advanceWithPresence,startExploration,challenge,formationSlots,formationCost,equip,unitPower,leaderApplies,applyFormationPreset,autoFormation,canSellUnit,sellUnit,applyGameAction};
+return {AREAS,BOSS,WORLDS,worldOf,levelCap,COLORS,TIERS,spriteFor,CHARACTERS,SKILL_EFFECTS,TRAITS,UPGRADES,xpFor,levelAt,xpProgress,maxLevel,readyForBoss,upgradeLevel,waitFor,buyUpgrade,fresh,fighter,recruitRates,rollRecruit,SALE_PRICES,RECOVERY_MS,readyAt,makeBattle,saleSettings,advance,AWAY_THRESHOLD,advanceWithPresence,startExploration,challenge,formationSlots,formationCost,equip,unitPower,projectedPower,leaderApplies,applyFormationPreset,autoFormation,canSellUnit,sellUnit,applyGameAction};
 })();
-const {AREAS,BOSS,WORLDS,worldOf,levelCap,COLORS,TIERS,spriteFor,CHARACTERS,SKILL_EFFECTS,TRAITS,UPGRADES,xpFor,levelAt,xpProgress,maxLevel,readyForBoss,upgradeLevel,waitFor,buyUpgrade,fresh,fighter,rollRecruit,SALE_PRICES,RECOVERY_MS,readyAt,makeBattle,saleSettings,advance,AWAY_THRESHOLD,advanceWithPresence,startExploration,challenge,formationSlots,formationCost,equip,unitPower,leaderApplies,applyFormationPreset,autoFormation,canSellUnit,sellUnit,applyGameAction}=game;
+const {AREAS,BOSS,WORLDS,worldOf,levelCap,COLORS,TIERS,spriteFor,CHARACTERS,SKILL_EFFECTS,TRAITS,UPGRADES,xpFor,levelAt,xpProgress,maxLevel,readyForBoss,upgradeLevel,waitFor,buyUpgrade,fresh,fighter,recruitRates,rollRecruit,SALE_PRICES,RECOVERY_MS,readyAt,makeBattle,saleSettings,advance,AWAY_THRESHOLD,advanceWithPresence,startExploration,challenge,formationSlots,formationCost,equip,unitPower,projectedPower,leaderApplies,applyFormationPreset,autoFormation,canSellUnit,sellUnit,applyGameAction}=game;
 const communityRules = (()=>{
 
 // A daily period is keyed by the local calendar date on which its noon began.
@@ -2459,7 +2470,7 @@ function renderProfile(){
     ${img(stats.sprite)}
     <div><p class="smallcaps">${stats.universe}</p><h2 id="profile-title">${stats.name}</h2>
     <p>${TIERS[stats.tier-1]} · ${stats.color} · ${stats.role} · ${unit.shiny?'Shiny':'Normal'}</p>
-    <p><b>Serial ${serial(unit)}</b> · ${publicUnit?'Comunidade':inTeam?'Formação principal':'Reserva'}${state.leader===unit.uid?' · Líder':''}</p></div>
+    <p>Força no nível 100 · ${int.format(projectedPower(unit))}</p><p><b>Serial ${publicUnit||community?.active()?'global':'local'} ${serial(unit)}</b> · ${publicUnit?'Comunidade':inTeam?'Formação principal':'Reserva'}${state.leader===unit.uid?' · Líder':''}</p></div>
   </header>
   <div class="profile-grid">
     <section class="card"><h3>Atributos</h3>${inTeam?`<p class="caption">Bônus de liderança de ${card(state.leader).name} incluído quando aplicável.</p>`:''}
@@ -2512,7 +2523,7 @@ function renderSettings(panel){
       <h3>Progresso da campanha</h3>${community?.active()?'<p class="caption">Sua conta salva no servidor. Guarde o código de acesso privado em Meu perfil.</p>':`<p class="caption"><span id="save-status"></span> ${location.protocol==='file:'?'Para atualizar o HTML, mantenha o mesmo nome, pasta e navegador. ':''}Use um backup para continuar em outro arquivo ou dispositivo.</p>
       <button type="button" id="export-save">Exportar backup</button> <button type="button" id="import-save">Importar backup</button>`}
       <label><input type="checkbox" id="auto-play"> Exploração automática</label><p class="caption">Parar conclui a luta em andamento e suspende os próximos encontros, inclusive AFK.</p>
-      <label><input type="checkbox" id="auto-routes"> Avançar de área ao atingir o nível necessário</label><p class="caption">Escolher uma área manualmente fixa a rota atual.</p>
+      <label><input type="checkbox" id="auto-routes"> Avançar áreas e mundos automaticamente</label><p class="caption">A equipe desafia o chefe quando ele libera e viaja após vencer. Escolher uma área ou mundo manualmente fixa a rota.</p>
       <h3>Venda automática de cópias</h3><label><input type="checkbox" data-sale="enabled"> Vender novas cópias selecionadas</label>
       <p class="caption">Escolha raridades ou personagens. A primeira normal e a primeira shiny de cada personagem ficam na coleção. Depois, cópias sem trait são vendidas. Para vender cópias com trait, escolha as exceções abaixo.</p>
       <p class="caption" id="sale-status" role="status"></p>
@@ -2587,7 +2598,7 @@ function renderWorldNav(){
 }
 
 let autoFormMode='power';
-const colFilter={search:'',sort:'power',role:'',tier:'',shiny:false,trait:false};
+const colFilter={search:'',sort:'potential',role:'',tier:'',shiny:false,trait:false};
 const ROLE_TAG={Guardião:'GUA',Combatente:'COM',Mágico:'MAG',Suporte:'SUP'};
 function countAffordableUpgrades(){
   return Object.entries(UPGRADES).filter(([id,u])=>{
@@ -2642,7 +2653,7 @@ function getCollectionIndex(){
   if(collectionIndex)return collectionIndex;
   collectionIndex=state.collection.map((unit,idx)=>{
     const c=CHARACTERS[unit.id];
-    return {unit,idx,c,power:unitPower(unit),level:levelAt(unit.xp),searchKey:`${c.name} ${c.universe} ${unit.trait??''}`.toLowerCase()};
+    return {unit,idx,c,power:unitPower(unit),potential:projectedPower(unit),level:levelAt(unit.xp),searchKey:`${c.name} ${c.universe} ${unit.trait??''}`.toLowerCase()};
   });
   return collectionIndex;
 }
@@ -2657,6 +2668,7 @@ function filteredCollection(){
     return true;
   });
   list.sort((a,b)=>{
+    if(colFilter.sort==='potential')return b.potential-a.potential||b.power-a.power;
     if(colFilter.sort==='power')return b.power-a.power||b.level-a.level||b.c.tier-a.c.tier;
     if(colFilter.sort==='level')return b.level-a.level||b.power-a.power;
     if(colFilter.sort==='tier')return b.c.tier-a.c.tier||b.power-a.power;
@@ -2673,11 +2685,11 @@ function renderCollectionGrid(){
   const allowSell=state.collection.length>1;
   const countEl=$('#collection-filtered-count');
   if(countEl)countEl.textContent=items.length===state.collection.length?`${state.collection.length} personagens recrutados`:`Mostrando ${items.length} de ${state.collection.length} personagens`;
-  grid.innerHTML=items.length?items.map(({unit,c,power})=>{
+  grid.innerHTML=items.length?items.map(({unit,c,power,potential})=>{
     const inTeam=teamSet.has(unit.uid);
     const sellable=allowSell&&!inTeam;
     const price=SALE_PRICES[c.tier-1]??0;
-    return `<div class="collection-card" style="--tone:${COLORS[c.color]}"><button class="character-hit" data-profile="${unit.uid}">${unitSummary(unit)}</button><p class="collection-meta"><span class="role-pill">${c.role}</span> <span class="power-pill">Força ${int.format(power)}</span>${unit.trait?` <span class="trait-pill">${unit.trait}</span>`:''}</p><p>${c.skill} · ${c.universe}</p><div class="collection-actions"><button class="ghost" data-equip="${unit.uid}" data-slot="${index}" data-occupant="${slots[index]??''}" ${inTeam?'disabled':''}>${inTeam?'Na equipe':slots[index]?'Substituir na vaga '+(index+1):'Colocar na vaga '+(index+1)}</button>${sellable?`<button class="ghost sell-btn" data-sell="${unit.uid}">Vender (+${int.format(price)})</button>`:''}</div></div>`;
+    return `<div class="collection-card" style="--tone:${COLORS[c.color]}"><button class="character-hit" data-profile="${unit.uid}">${unitSummary(unit)}</button><p class="collection-meta"><span class="role-pill">${c.role}</span> <span class="power-pill">Força ${int.format(power)}</span> <span class="power-pill">Nv. 100 · ${int.format(potential)}</span>${unit.trait?` <span class="trait-pill">${unit.trait}</span>`:''}</p><p>${c.skill} · ${c.universe}</p><div class="collection-actions"><button class="ghost" data-equip="${unit.uid}" data-slot="${index}" data-occupant="${slots[index]??''}" ${inTeam?'disabled':''}>${inTeam?'Na equipe':slots[index]?'Substituir na vaga '+(index+1):'Colocar na vaga '+(index+1)}</button>${sellable?`<button class="ghost sell-btn" data-sell="${unit.uid}">Vender (+${int.format(price)})</button>`:''}</div></div>`;
   }).join(''):'<p class="caption">Nenhum personagem encontrado com os filtros selecionados.</p>';
 }
 function floatTag(target,text,cls=''){
@@ -2716,7 +2728,7 @@ function renderPanel(){
     const level=maxLevel(state),world=worldOf(state),currentArea=world.areas[state.area];
     const toElite=state.area===2?(7-(state.index%7)):null;
     panel.innerHTML=`<div class="layout"><article class="card"><h2>Campanha</h2><p class="caption">${state.destination!==undefined?'Viagem após o combate atual.':`Mundo ${(state.world??0)+1} de ${WORLDS.length}`}</p>
-    <div class="explore-meta"><label class="inline-toggle"><input type="checkbox" id="explore-auto-routes" ${state.autoRoutes?'checked':''}> Avançar de área automaticamente</label><span class="affinity-chip"><i class="color-dot" style="--hue:${COLORS[currentArea.color]}"></i> Contra <b>${currentArea.color}</b>: ${teamAffinitySummary(currentArea.color)}</span>${toElite!==null?`<span class="elite-chip">${toElite===1?'Próximo encontro: Elite':`Elite (${world.elite.name}) em ${toElite} lutas`}</span>`:''}</div>
+    <div class="explore-meta"><label class="inline-toggle"><input type="checkbox" id="explore-auto-routes" ${state.autoRoutes?'checked':''}> Avançar áreas, chefes e mundos</label><span class="affinity-chip"><i class="color-dot" style="--hue:${COLORS[currentArea.color]}"></i> Contra <b>${currentArea.color}</b>: ${teamAffinitySummary(currentArea.color)}</span>${toElite!==null?`<span class="elite-chip">${toElite===1?'Próximo encontro: Elite':`Elite (${world.elite.name}) em ${toElite} lutas`}</span>`:''}</div>
     <div class="area-list">${world.areas.map((a,i)=>`<button class="area-option" type="button" data-area="${i}" ${level<a.unlock?'disabled':''} aria-pressed="${state.area===i}"><span class="index-badge">${i+1}</span><span><strong>${a.name} <i class="color-dot" style="--hue:${COLORS[a.color]}" title="Cor do inimigo: ${a.color}"></i></strong><small>${a.description}</small></span><em>${level<a.unlock?`Libera no nv. ${a.unlock}`:`Nv. ${a.levels[0]}–${a.levels[1]}`}</em></button>`).join('')}</div></article><aside><article class="card boss"><h3>Chefe · ${world.boss.name} <small>Nv. ${world.boss.level}</small></h3><p class="caption boss-aff"><i class="color-dot" style="--hue:${COLORS[world.boss.color]}"></i> ${world.boss.color} · ${teamAffinitySummary(world.boss.color)}</p><div class="meter"><i style="width:${Math.min(100,state.finalWins/12*100)}%"></i></div><p class="caption">${state.completed?(state.world===9?'Campanha concluída.':'Próximo mundo disponível no menu de mundos.'):`${Math.min(12,state.finalWins)} / 12 vitórias em ${world.areas[2].name}`}</p><button class="primary" data-action="boss" ${!readyForBoss(state)||state.pending?'disabled':''}>${state.completed?'Chefe derrotado':state.pending?'Aguarde o fim da luta':'Desafiar chefe'}</button></article><article class="card"><h3>Últimos encontros</h3>${efficiencySummary()}<ul class="activity">${state.log.length?state.log.slice(0,4).map(e=>`<li><span>${e.label}${e.reserveXp?`<small>+${e.reserveXp} XP entre reservas</small>`:''}</span><b ${!e.won?'class="loss"':''}>${e.won?`+${int.format(e.gold)} ouro`:'Derrota'}</b></li>`).join(''):'<li>Seus resultados aparecem aqui.</li>'}</ul></article></aside></div>`;
   }else if(tab==='formacao'){
     if(!state.team.includes(selected))selected=state.team[0];
@@ -2725,7 +2737,7 @@ function renderPanel(){
     const teamPower=state.team.reduce((sum,uid)=>sum+unitPower(copy(uid),active),0);
     const reserves=state.collection.filter(u=>!state.team.includes(u.uid)).sort((a,b)=>unitPower(b)-unitPower(a));
     const currentArea=worldOf(state).areas[state.area];
-    panel.innerHTML=`<div class="formation-toolbar card"><div class="formation-stats"><span class="stat-pill">Força total <strong>${int.format(teamPower)}</strong></span><span class="stat-pill">Vagas <strong>${formationCost(state)}/4</strong></span><span class="stat-pill"><i class="color-dot" style="--hue:${COLORS[currentArea.color]}"></i> Contra ${currentArea.color}: ${teamAffinitySummary(currentArea.color)}</span></div><div class="auto-form-controls"><label>Critério <select id="auto-form-mode"><option value="power" ${autoFormMode==='power'?'selected':''}>Maior força</option><option value="balanced" ${autoFormMode==='balanced'?'selected':''}>Equilibrada</option><option value="area" ${autoFormMode==='area'?'selected':''}>Contra área atual</option></select></label><button type="button" class="primary" id="auto-form-btn">Auto-formação</button></div></div>
+    panel.innerHTML=`<div class="formation-toolbar card"><div class="formation-stats"><span class="stat-pill">Força total <strong>${int.format(teamPower)}</strong></span><span class="stat-pill">Vagas <strong>${formationCost(state)}/4</strong></span><span class="stat-pill"><i class="color-dot" style="--hue:${COLORS[currentArea.color]}"></i> Contra ${currentArea.color}: ${teamAffinitySummary(currentArea.color)}</span></div><div class="auto-form-controls"><label>Critério no nível 100 <select id="auto-form-mode"><option value="power" ${autoFormMode==='power'?'selected':''}>Maior força</option><option value="balanced" ${autoFormMode==='balanced'?'selected':''}>Equilibrada</option><option value="area" ${autoFormMode==='area'?'selected':''}>Contra área atual</option></select></label><button type="button" class="primary" id="auto-form-btn">Auto-formação</button></div></div>
       <div class="formation-layout"><article class="card formation-board"><div class="board-head"><h2>Formação de combate</h2><div class="preset-group" role="group" aria-label="Posicionamento rápido"><button type="button" class="ghost" data-preset="padrao">Padrão</button><button type="button" class="ghost" data-preset="espalhado">Espalhado</button><button type="button" class="ghost" data-preset="proteger">Proteger</button></div></div>
       <div class="field" id="field"><span class="field-label back">RETAGUARDA</span><span class="field-label">FRENTE</span>
       ${state.team.map(uid=>{const [x,y]=state.positions[uid];const c=card(uid);return `<button class="field-marker ${uid===selected?'active':''}" data-marker="${uid}" aria-label="Ficha de ${c.name} (${c.role}). Use as setas para mover." style="left:${x}%;top:${y}%;--tone:${COLORS[c.color]}"><span class="marker-role">${ROLE_TAG[c.role]??''}</span>${img(spriteFor(copy(uid)))}<small>${c.name.split(' · ')[0]}</small></button>`;}).join('')}</div>
@@ -2750,12 +2762,22 @@ function renderPanel(){
     }else{
       const searchValue=colFilter.search.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
       panel.innerHTML=`<article class="card"><div class="swap"><div><h2>Coleção</h2><p class="caption" id="collection-filtered-count"></p></div><label>Vaga de destino <select id="swap-target">${slotOptions}</select></label></div>
-    <div class="collection-filters"><label class="search-field"><span>Buscar</span><input type="search" id="col-search" placeholder="Nome, universo ou trait" value="${searchValue}"></label><select id="col-sort" aria-label="Ordenar coleção"><option value="power" ${colFilter.sort==='power'?'selected':''}>Maior força</option><option value="level" ${colFilter.sort==='level'?'selected':''}>Maior nível</option><option value="tier" ${colFilter.sort==='tier'?'selected':''}>Maior raridade</option><option value="recent" ${colFilter.sort==='recent'?'selected':''}>Mais recente</option></select><select id="col-role" aria-label="Filtrar por função"><option value="">Todas funções</option>${['Guardião','Combatente','Mágico','Suporte'].map(r=>`<option value="${r}" ${colFilter.role===r?'selected':''}>${r}</option>`).join('')}</select><select id="col-tier" aria-label="Filtrar por raridade"><option value="">Todas raridades</option>${TIERS.map((t,i)=>`<option value="${i+1}" ${colFilter.tier===String(i+1)?'selected':''}>${t}</option>`).join('')}</select><label class="filter-check"><input type="checkbox" id="col-shiny" ${colFilter.shiny?'checked':''}> Shiny</label><label class="filter-check"><input type="checkbox" id="col-trait" ${colFilter.trait?'checked':''}> Com Trait</label></div>
+    <div class="collection-filters"><label class="search-field"><span>Buscar</span><input type="search" id="col-search" placeholder="Nome, universo ou trait" value="${searchValue}"></label><select id="col-sort" aria-label="Ordenar coleção"><option value="potential" ${colFilter.sort==='potential'?'selected':''}>Força no nível 100</option><option value="power" ${colFilter.sort==='power'?'selected':''}>Maior força</option><option value="level" ${colFilter.sort==='level'?'selected':''}>Maior nível</option><option value="tier" ${colFilter.sort==='tier'?'selected':''}>Maior raridade</option><option value="recent" ${colFilter.sort==='recent'?'selected':''}>Mais recente</option></select><select id="col-role" aria-label="Filtrar por função"><option value="">Todas funções</option>${['Guardião','Combatente','Mágico','Suporte'].map(r=>`<option value="${r}" ${colFilter.role===r?'selected':''}>${r}</option>`).join('')}</select><select id="col-tier" aria-label="Filtrar por raridade"><option value="">Todas raridades</option>${TIERS.map((t,i)=>`<option value="${i+1}" ${colFilter.tier===String(i+1)?'selected':''}>${t}</option>`).join('')}</select><label class="filter-check"><input type="checkbox" id="col-shiny" ${colFilter.shiny?'checked':''}> Shiny</label><label class="filter-check"><input type="checkbox" id="col-trait" ${colFilter.trait?'checked':''}> Com Trait</label></div>
     <div class="collection-grid" id="collection-list"></div></article>`;
     }
     renderCollectionGrid();
   }else if(tab==='guia'){
-    panel.innerHTML=`<article class="card guide"><h2>Guia de combate</h2>${colorChart()}
+    panel.innerHTML=`<article class="card guide"><h2>Guia do jogador</h2>
+    <section aria-labelledby="primeiros-passos"><h3 id="primeiros-passos">Primeiros passos</h3>
+    <ol class="primeiros-passos">
+      <li><strong>Acompanhe sua primeira luta.</strong> Abra <b>Exploração</b>. Seu time já começa lutando em Namek. Cada vitória rende ouro e experiência (XP). Se aparecer um personagem recrutável, vença a luta para adicioná-lo à <b>Coleção</b>.</li>
+      <li><strong>Escolha quem vai lutar.</strong> Em <b>Formação</b>, use <b>Auto-formação</b> para preencher as vagas e escolher um líder. Para comparar dois míticos, abra a <b>Coleção</b>, filtre por raridade e ordene por <b>Força no nível 100</b>. A força atual mostra quem está mais forte hoje. A projeção compara as duas cópias no mesmo nível e entra no cálculo da autoformação.</li>
+      <li><strong>Use o ouro para melhorar os próximos encontros.</strong> Em <b>Upgrades</b>, <b>Sorte</b> aumenta a chance de encontrar um recruta em lutas comuns até 50%. Depois, a Sorte melhora a chance de ele ser Raro ou superior. <b>Rastreio de raros</b> aumenta a chance de esse recruta ser de raridade Rara ou superior.</li>
+      <li><strong>Avance para o próximo mundo.</strong> Em <b>Exploração</b>, marque <b>Avançar áreas, chefes e mundos</b>. O time muda de área ao atingir o nível necessário. Depois de 12 vitórias comuns ou de elite na última área, ele desafia o chefe e, ao vencer, segue para o próximo mundo. Escolher uma área ou mundo manualmente desliga essa opção. Marque-a de novo quando quiser continuar a campanha.</li>
+    </ol>
+    <p><strong>Quando encontrar uma cópia repetida</strong>, confira a versão e a trait (característica especial) na ficha. Se ativar a venda automática em <b>Configurações</b>, a primeira normal e a primeira shiny de cada personagem ficam protegidas. Os filtros de venda passam a valer para as próximas cópias.</p>
+    <p><strong>Se um inimigo estiver dando trabalho</strong>, confira a cor dele. No mapa abaixo, escolha <b>Defendendo</b> e selecione a cor do inimigo para descobrir quais cores causam mais dano contra ele.</p></section>
+    ${colorChart()}
     <h3>Funções</h3><ul><li><b>Combatente</b> · Ataque elevado e golpes básicos físicos.</li><li><b>Guardião</b> · Mais PV e defesa. Seus golpes básicos são físicos.</li><li><b>Mágico</b> · Usa Magia nos golpes básicos e enfrenta a Resistência do alvo.</li><li><b>Suporte</b> · Usa Magia nos golpes básicos. Na reserva da Arena, cura o aliado ativo.</li></ul>
     <h3>Formação e liderança</h3><p>Na exploração, os titulares lutam juntos. Na Arena, entra um por vez, na ordem das vagas ocupadas. Escolha o líder na Formação e consulte a ficha para ver quem recebe o bônus.</p>
     <h3>Raridade e traits</h3><p>${TIERS.join(' → ')}. Na ficha, você encontra a raridade, a versão Shiny e os bônus da trait de cada cópia.</p><h3>Traits e efeitos</h3><p>A chance indica quantos personagens recrutáveis, em média, correspondem a uma ocorrência da trait.</p><div class="trait-list">${TRAITS.map(t=>`<section><header><strong>${t.name}</strong><small>${t.rarity} · 1/${int.format(t.odds)} · ${(100/t.odds).toLocaleString('pt-BR',{maximumFractionDigits:3})}%</small></header><p>${traitEffects(t).slice(0,t.buffs.filter(Boolean).length).join(' · ')}</p>${t.passive?`<p>${t.passive}</p>`:''}</section>`).join('')}</div></article>`;
@@ -2764,13 +2786,16 @@ function renderPanel(){
   }else{
     const luck=UPGRADES.sorte.values[upgradeLevel(state,'sorte')];
     const rare=UPGRADES.rastreio.values[upgradeLevel(state,'rastreio')];
-    const rareEncounter=(luck*rare/100).toLocaleString('pt-BR',{maximumFractionDigits:2});
-    panel.innerHTML=`<article class="card"><h2>Upgrades de exploração</h2><p class="caption">Encontros comuns · ${luck}% de chance de aparecer um recruta · ${rareEncounter}% de chance de aparecer um recruta de raridade Rara ou superior.</p>${Object.entries(UPGRADES).map(([id,upgrade])=>{
+    const rates=recruitRates(luck,rare);
+    const rareEncounter=(rates.encounter*rates.rare/100).toLocaleString('pt-BR',{maximumFractionDigits:2});
+    panel.innerHTML=`<article class="card"><h2>Upgrades de exploração</h2><p class="caption">Encontros comuns · ${rates.encounter}% de chance de aparecer um recruta · ${rareEncounter}% de chance de aparecer um recruta de raridade Rara ou superior.</p>${Object.entries(UPGRADES).map(([id,upgrade])=>{
       const level=upgradeLevel(state,id);
       const price=upgrade.costs[level];
       const world=upgrade.worlds[level];
       const locked=world>(state.unlocked??0)+1;
-      const effect=index=>`${id==='ouro'||id==='treino'?'+':''}${upgrade.values[index]}${upgrade.unit}`;
+      const effect=index=>id==='sorte'?
+        `${Math.min(50,upgrade.values[index])}% de recruta · +${Math.max(0,upgrade.values[index]-50)}% sobre a chance de Raro ou superior`:
+        `${id==='ouro'||id==='treino'?'+':''}${upgrade.values[index]}${upgrade.unit}`;
       return `<div class="upgrades-row"><div><h3>${upgrade.name} <small>Nível ${level} / ${upgrade.costs.length}</small></h3><p>${upgrade.description}</p><p class="upgrade-effect">${effect(level)}${price===undefined?'':` → ${effect(level+1)}`}</p></div><button class="primary" data-upgrade="${id}" aria-label="${upgrade.name} · ${price===undefined?'Nível máximo':`Comprar por ${int.format(price)} ouro`}" ${price===undefined||locked||state.gold<price?'disabled':''}>${price===undefined?'Nível máximo':`${int.format(price)} ouro${locked?' · Mundo '+world:''}`}</button></div>`;
     }).join('')}</article>`;
   }

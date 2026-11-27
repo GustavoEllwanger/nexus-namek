@@ -26,7 +26,7 @@ Para jogar solo, abra `jogar_namek.html` no navegador. O progresso solo é local
 
 A equipe já começa explorando ao abrir o jogo ou criar a conta online. O retorno contabiliza até 12 horas de ausência e a exploração continua. **Parar exploração** conclui a luta atual e suspende os próximos encontros, mesmo após fechar o jogo. Para retomar, clique em **Explorar** na própria arena (ou marque **Exploração automática** em **Configurações**).
 
-Cada mundo tem três áreas, um encontro de elite e um chefe. Por padrão, a equipe passa para uma área de nível mais alto assim que pode. Escolher uma rota manualmente fixa essa área. Após 12 vitórias na área final, desafie o chefe entre encontros. A primeira vitória libera o próximo destino no menu lateral **Mundos** e amplia o limite de nível em dez, até o nível 100. O progresso de cada mundo fica salvo ao viajar.
+Cada mundo tem três áreas, um encontro de elite e um chefe. Por padrão, a equipe passa para uma área de nível mais alto assim que pode. Escolher uma rota manualmente fixa essa área. Após 12 vitórias na área final, a progressão automática desafia o chefe e viaja após vencer. A escolha manual de mundo ou área desliga a progressão automática. A primeira vitória libera o próximo destino no menu lateral **Mundos** e amplia o limite de nível em dez, até o nível 100. O progresso de cada mundo fica salvo ao viajar.
 
 A campanha passa por Namek, Arlong Park, Exames Chūnin, Soul Society, Jujutsu Kaisen, Black Clover, Nanatsu no Taizai, JoJo, Hunter × Hunter e One Punch Man. Os mundos usam sprites provisórios. O elenco recrutável é compartilhado entre os mundos, com preferência pelo universo local quando há candidatos no tier sorteado.
 
@@ -46,3 +46,9 @@ As opções de animações e números de dano ficam neste dispositivo. Os upgrad
 ## Arena das bolas
 
 Abra **Arena → Começar duelo** para treinar com sua formação contra a equipe de Namek. No servidor, abra o perfil de outro jogador em Comunidade e escolha **Desafiar na Arena** para enfrentar uma cópia da formação atual com seu bônus de líder. A exploração continua. Os duelos são amistosos e não concedem recompensas. Sair da aba pausa o duelo. Fechar o jogo encerra a partida.
+
+## Comparação de força e seriais
+
+Na Coleção, filtre a raridade e ordene por **Força no nível 100**. O potencial soma os seis atributos no nível 100, incluindo os modificadores da cópia. A autoformação usa essa projeção e também considera o bônus do líder e o critério escolhido.
+
+Na Comunidade, cada personagem tem uma sequência global para a versão normal e outra para a shiny. Vendas não liberam números. Na migração, as contas antigas recebem faixas por ordem de criação, mantendo a ordem de cada jogador dentro da faixa. O modo solo usa seriais locais.
