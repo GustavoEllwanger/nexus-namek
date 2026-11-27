@@ -8,7 +8,7 @@
 4. Na segunda conta, anote o código de amigo. Na primeira, abra **Amigos**, envie o convite e aceite-o na segunda conta.
 5. Envie um presente. Atualize **Amigos** no destinatário para ver o recebimento. O saldo se atualiza na sincronização do jogo.
 
-Duas pessoas em computadores diferentes precisam acessar a mesma instância. Para um teste na mesma rede, no PowerShell execute `$env:NEXUS_HOST="0.0.0.0"; npm start` e use o IP de rede da máquina que iniciou o servidor. Em uma hospedagem Node, use HTTPS, configure `PORT` e `NEXUS_HOST` e aponte `NEXUS_DB` para um volume persistente. A configuração estática do Cloudflare serve somente os arquivos públicos. O servidor de Comunidade precisa de Node.js com SQLite.
+Duas pessoas em computadores diferentes precisam acessar a mesma instância. Para um teste na mesma rede, no PowerShell execute `$env:NEXUS_HOST="0.0.0.0"; npm start` e use o IP de rede da máquina que iniciou o servidor. Em uma hospedagem Node, use HTTPS, configure `PORT` e `NEXUS_HOST` e aponte `NEXUS_DB` para um volume persistente. No Cloudflare Pages, publique o conteúdo de nexus-cloudflare.zip e vincule um banco D1 à variável NEXUS_DB em produção. Após criar ou alterar o vínculo, publique novamente. O Worker incluído atende a API da Comunidade.
 
 O banco padrão fica em `data/nexus.sqlite`. O ouro, o inventário, os encontros, os upgrades, os perfis e as amizades online ficam no servidor. Não compartilhe o banco ou os códigos de acesso privados. O código de amigo pode ser compartilhado. O tempo de jogo conta os intervalos de interação e sincronização enquanto o jogo está visível. Encontros AFK concluídos entram na contagem de encontros.
 
@@ -16,7 +16,7 @@ O banco padrão fica em `data/nexus.sqlite`. O ouro, o inventário, os encontros
 
 - **Raridade** ordena os personagens com chance de obtenção registrada. `1/100M` significa uma chance em cem milhões. O valor completo aparece ao passar o cursor sobre a abreviação.
 - **Força** soma PV, Ataque, Magia, Defesa, Resistência e Velocidade dos quatro personagens com maior soma no inventário. Nível, Traits e Shiny entram na conta. Posição na formação e bônus de líder não entram.
-- **Perfil** tem tempo de jogo ativo, encontros concluídos, Time atual e Showcase automático com até cinco recrutados de maior raridade. O dono pode escolher fundo, ícone e borda.
+- **Perfil** tem tempo de jogo ativo, encontros concluídos, Time atual e Showcase automático com até cinco recrutados de maior raridade. O dono pode escolher o cenário de fundo, enviar uma foto para o avatar e escolher a borda.
 - **Amigos** permite convidar, aceitar, remover e enviar um presente por amigo a cada ciclo. Cada presente dá 10 de ouro, creditados de imediato. O histórico fica em **Presentes recebidos**.
 - **Horário global** usa o relógio do servidor. Cada ciclo começa ao meio-dia no fuso `America/Sao_Paulo`. Outros modos podem usar a mesma função `dailyCycle`.
 
@@ -26,13 +26,13 @@ Para jogar solo, abra `jogar_namek.html` no navegador. O progresso solo é local
 
 A equipe já começa explorando ao abrir o jogo ou criar a conta online. O retorno contabiliza até 12 horas de ausência e a exploração continua. **Parar exploração** conclui a luta atual e suspende os próximos encontros, mesmo após fechar o jogo. Para retomar, clique em **Explorar** na própria arena (ou marque **Exploração automática** em **Configurações**).
 
-Cada mundo tem três áreas, um encontro de elite e um chefe. Por padrão, a equipe passa para uma área de nível mais alto assim que pode. Escolher uma rota manualmente fixa essa área. Após 12 vitórias na área final, desafie o chefe entre encontros. A primeira vitória libera o próximo destino no seletor **Mundo** e amplia o limite de nível em dez, até o nível 100. O progresso de cada mundo fica salvo ao viajar.
+Cada mundo tem três áreas, um encontro de elite e um chefe. Por padrão, a equipe passa para uma área de nível mais alto assim que pode. Escolher uma rota manualmente fixa essa área. Após 12 vitórias na área final, desafie o chefe entre encontros. A primeira vitória libera o próximo destino no menu lateral **Mundos** e amplia o limite de nível em dez, até o nível 100. O progresso de cada mundo fica salvo ao viajar.
 
 A campanha passa por Namek, Arlong Park, Exames Chūnin, Soul Society, Jujutsu Kaisen, Black Clover, Nanatsu no Taizai, JoJo, Hunter × Hunter e One Punch Man. Os mundos usam sprites provisórios. O elenco recrutável é compartilhado entre os mundos, com preferência pelo universo local quando há candidatos no tier sorteado.
 
 Na **Formação**, arraste os personagens no campo, use **Auto-formação** (por maior força, equipe equilibrada ou vantagem contra a área atual), escolha presets rápidos de posicionamento, defina o líder ou troque um titular por um reserva. Com o teclado, use Tab para focar um marcador, as setas para movê-lo e Enter para abrir a ficha. Na **Coleção**, filtre por busca, função, raridade, Shiny ou Trait, ordene por força/nível/raridade e venda reservas quando desejar. Clique no personagem na arena, na coleção ou na formação para consultar seus atributos.
 
-As opções de animações e números de dano ficam neste dispositivo. Os upgrades de ritmo, sorte, ouro e XP compartilhada ficam no progresso da campanha.
+As opções de animações e números de dano ficam neste dispositivo. Os upgrades de ritmo, sorte, ouro, XP compartilhada, rastreio de raros, treino e enfermaria ficam no progresso da campanha.
 
 ## Verificação e desenvolvimento
 
