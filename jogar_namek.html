@@ -1025,7 +1025,7 @@ const position = [[72,47],[56,72],[39,28],[22,59]];
 const HOUR = 3600000;
 const UPGRADES = {
   ritmo:{name:'Ritmo de expedição',worlds:[1,2,4,6,8],costs:[120,1800,15000,80000,240000],values:[10,9,8,7,6,5],unit:' s',description:'Reduz a espera entre encontros.'},
-  sorte:{name:'Sorte',worlds:[1,1,1,2,3,5,7,8,10],costs:[50,125,300,1000,3500,12000,36000,90000,200000],values:[10,20,30,40,50,60,70,80,90,100],unit:'%',description:'Chance de encontrar um personagem recrutável em uma luta comum. Vença para recrutá-lo.'},
+  sorte:{name:'Sorte',worlds:[1,1,1,2,3,5,7,8,10],costs:[50,125,300,1000,3500,12000,36000,90000,200000],values:[10,20,30,40,50,60,70,80,90,100],unit:'%',description:'Até 50%, aumenta a chance de encontrar um recruta em lutas comuns. Cada ponto acima de 50% aumenta em 1% relativo a chance de esse recruta ser Raro ou superior.'},
   ouro:{name:'Bônus de ouro',worlds:[1,1,1,2,4,6,8],costs:[75,180,400,2000,18000,90000,250000],values:[0,10,20,30,35,40,45,50],unit:'%',description:'Acrescenta ouro às vitórias em encontros comuns e de elite.'},
   xp:{name:'Experiência compartilhada',worlds:[1,1,1,2,4,6,8],costs:[60,150,325,1600,14000,75000,210000],values:[0,25,40,60,70,80,90,100],unit:'%',description:'Distribui entre os reservas uma fração da XP que um titular recebe por vitória. Cada titular mantém sua recompensa integral.'},
   rastreio:{name:'Rastreio de raros',worlds:[1,2,4,6,9],costs:[100,600,4500,24000,100000],values:[18,20,24,28,32,36],unit:'%',description:'Chance de um recruta ser de raridade Rara ou superior. Cada uma dessas raridades recebe o mesmo aumento proporcional.'},
@@ -1112,10 +1112,15 @@ function recruitWeights(rarePercent){
     return i===1?weight:weight*rarePercent/base;
   });
 }
-function rollRecruit(random,chance=.10,universe='Dragon Ball',rarePercent=UPGRADES.rastreio.values[0]){
+function recruitRates(luckPercent,rastreioPercent){
+  return {encounter:Math.min(50,luckPercent),rare:rastreioPercent*(100+Math.max(0,luckPercent-50))/100};
+}
+function rollRecruit(random,luck=.10,universe='Dragon Ball',rarePercent=UPGRADES.rastreio.values[0]){
+  const rates=recruitRates(luck*100,rarePercent);
+  const chance=rates.encounter/100;
   if(random()>=chance) return null;
   let p=random(),tier=1;
-  const weights=recruitWeights(rarePercent);
+  const weights=recruitWeights(rates.rare);
   for(const weight of weights){if(p<weight)break;p-=weight;tier++;}
   tier=Math.min(tier,8);
   const candidates=Object.values(CHARACTERS).filter(c=>c.tier===tier);
@@ -1619,9 +1624,9 @@ function applyGameAction(state,action,now){
   }
 }
 
-return {AREAS,BOSS,WORLDS,worldOf,levelCap,COLORS,TIERS,spriteFor,CHARACTERS,SKILL_EFFECTS,TRAITS,UPGRADES,xpFor,levelAt,xpProgress,maxLevel,readyForBoss,upgradeLevel,waitFor,buyUpgrade,fresh,fighter,rollRecruit,SALE_PRICES,RECOVERY_MS,readyAt,makeBattle,saleSettings,advance,AWAY_THRESHOLD,advanceWithPresence,startExploration,challenge,formationSlots,formationCost,equip,unitPower,projectedPower,leaderApplies,applyFormationPreset,autoFormation,canSellUnit,sellUnit,applyGameAction};
+return {AREAS,BOSS,WORLDS,worldOf,levelCap,COLORS,TIERS,spriteFor,CHARACTERS,SKILL_EFFECTS,TRAITS,UPGRADES,xpFor,levelAt,xpProgress,maxLevel,readyForBoss,upgradeLevel,waitFor,buyUpgrade,fresh,fighter,recruitRates,rollRecruit,SALE_PRICES,RECOVERY_MS,readyAt,makeBattle,saleSettings,advance,AWAY_THRESHOLD,advanceWithPresence,startExploration,challenge,formationSlots,formationCost,equip,unitPower,projectedPower,leaderApplies,applyFormationPreset,autoFormation,canSellUnit,sellUnit,applyGameAction};
 })();
-const {AREAS,BOSS,WORLDS,worldOf,levelCap,COLORS,TIERS,spriteFor,CHARACTERS,SKILL_EFFECTS,TRAITS,UPGRADES,xpFor,levelAt,xpProgress,maxLevel,readyForBoss,upgradeLevel,waitFor,buyUpgrade,fresh,fighter,rollRecruit,SALE_PRICES,RECOVERY_MS,readyAt,makeBattle,saleSettings,advance,AWAY_THRESHOLD,advanceWithPresence,startExploration,challenge,formationSlots,formationCost,equip,unitPower,projectedPower,leaderApplies,applyFormationPreset,autoFormation,canSellUnit,sellUnit,applyGameAction}=game;
+const {AREAS,BOSS,WORLDS,worldOf,levelCap,COLORS,TIERS,spriteFor,CHARACTERS,SKILL_EFFECTS,TRAITS,UPGRADES,xpFor,levelAt,xpProgress,maxLevel,readyForBoss,upgradeLevel,waitFor,buyUpgrade,fresh,fighter,recruitRates,rollRecruit,SALE_PRICES,RECOVERY_MS,readyAt,makeBattle,saleSettings,advance,AWAY_THRESHOLD,advanceWithPresence,startExploration,challenge,formationSlots,formationCost,equip,unitPower,projectedPower,leaderApplies,applyFormationPreset,autoFormation,canSellUnit,sellUnit,applyGameAction}=game;
 const communityRules = (()=>{
 
 // A daily period is keyed by the local calendar date on which its noon began.
@@ -2767,7 +2772,7 @@ function renderPanel(){
     <ol class="primeiros-passos">
       <li><strong>Acompanhe sua primeira luta.</strong> Abra <b>Exploração</b>. Seu time já começa lutando em Namek. Cada vitória rende ouro e experiência (XP). Se aparecer um personagem recrutável, vença a luta para adicioná-lo à <b>Coleção</b>.</li>
       <li><strong>Escolha quem vai lutar.</strong> Em <b>Formação</b>, use <b>Auto-formação</b> para preencher as vagas e escolher um líder. Para comparar dois míticos, abra a <b>Coleção</b>, filtre por raridade e ordene por <b>Força no nível 100</b>. A força atual mostra quem está mais forte hoje. A projeção compara as duas cópias no mesmo nível e entra no cálculo da autoformação.</li>
-      <li><strong>Use o ouro para melhorar os próximos encontros.</strong> Em <b>Upgrades</b>, <b>Sorte</b> aumenta a chance de encontrar um recruta em lutas comuns. <b>Rastreio de raros</b> aumenta a chance de esse recruta ser de raridade Rara ou superior.</li>
+      <li><strong>Use o ouro para melhorar os próximos encontros.</strong> Em <b>Upgrades</b>, <b>Sorte</b> aumenta a chance de encontrar um recruta em lutas comuns até 50%. Depois, a Sorte melhora a chance de ele ser Raro ou superior. <b>Rastreio de raros</b> aumenta a chance de esse recruta ser de raridade Rara ou superior.</li>
       <li><strong>Avance para o próximo mundo.</strong> Em <b>Exploração</b>, marque <b>Avançar áreas, chefes e mundos</b>. O time muda de área ao atingir o nível necessário. Depois de 12 vitórias comuns ou de elite na última área, ele desafia o chefe e, ao vencer, segue para o próximo mundo. Escolher uma área ou mundo manualmente desliga essa opção. Marque-a de novo quando quiser continuar a campanha.</li>
     </ol>
     <p><strong>Quando encontrar uma cópia repetida</strong>, confira a versão e a trait (característica especial) na ficha. Se ativar a venda automática em <b>Configurações</b>, a primeira normal e a primeira shiny de cada personagem ficam protegidas. Os filtros de venda passam a valer para as próximas cópias.</p>
@@ -2781,13 +2786,16 @@ function renderPanel(){
   }else{
     const luck=UPGRADES.sorte.values[upgradeLevel(state,'sorte')];
     const rare=UPGRADES.rastreio.values[upgradeLevel(state,'rastreio')];
-    const rareEncounter=(luck*rare/100).toLocaleString('pt-BR',{maximumFractionDigits:2});
-    panel.innerHTML=`<article class="card"><h2>Upgrades de exploração</h2><p class="caption">Encontros comuns · ${luck}% de chance de aparecer um recruta · ${rareEncounter}% de chance de aparecer um recruta de raridade Rara ou superior.</p>${Object.entries(UPGRADES).map(([id,upgrade])=>{
+    const rates=recruitRates(luck,rare);
+    const rareEncounter=(rates.encounter*rates.rare/100).toLocaleString('pt-BR',{maximumFractionDigits:2});
+    panel.innerHTML=`<article class="card"><h2>Upgrades de exploração</h2><p class="caption">Encontros comuns · ${rates.encounter}% de chance de aparecer um recruta · ${rareEncounter}% de chance de aparecer um recruta de raridade Rara ou superior.</p>${Object.entries(UPGRADES).map(([id,upgrade])=>{
       const level=upgradeLevel(state,id);
       const price=upgrade.costs[level];
       const world=upgrade.worlds[level];
       const locked=world>(state.unlocked??0)+1;
-      const effect=index=>`${id==='ouro'||id==='treino'?'+':''}${upgrade.values[index]}${upgrade.unit}`;
+      const effect=index=>id==='sorte'?
+        `${Math.min(50,upgrade.values[index])}% de recruta · +${Math.max(0,upgrade.values[index]-50)}% sobre a chance de Raro ou superior`:
+        `${id==='ouro'||id==='treino'?'+':''}${upgrade.values[index]}${upgrade.unit}`;
       return `<div class="upgrades-row"><div><h3>${upgrade.name} <small>Nível ${level} / ${upgrade.costs.length}</small></h3><p>${upgrade.description}</p><p class="upgrade-effect">${effect(level)}${price===undefined?'':` → ${effect(level+1)}`}</p></div><button class="primary" data-upgrade="${id}" aria-label="${upgrade.name} · ${price===undefined?'Nível máximo':`Comprar por ${int.format(price)} ouro`}" ${price===undefined||locked||state.gold<price?'disabled':''}>${price===undefined?'Nível máximo':`${int.format(price)} ouro${locked?' · Mundo '+world:''}`}</button></div>`;
     }).join('')}</article>`;
   }
