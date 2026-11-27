@@ -2762,7 +2762,17 @@ function renderPanel(){
     }
     renderCollectionGrid();
   }else if(tab==='guia'){
-    panel.innerHTML=`<article class="card guide"><h2>Guia de combate</h2>${colorChart()}
+    panel.innerHTML=`<article class="card guide"><h2>Guia do jogador</h2>
+    <section aria-labelledby="primeiros-passos"><h3 id="primeiros-passos">Primeiros passos</h3>
+    <ol class="primeiros-passos">
+      <li><strong>Acompanhe sua primeira luta.</strong> Abra <b>Exploração</b>. Seu time já começa lutando em Namek. Cada vitória rende ouro e experiência (XP). Se aparecer um personagem recrutável, vença a luta para adicioná-lo à <b>Coleção</b>.</li>
+      <li><strong>Escolha quem vai lutar.</strong> Em <b>Formação</b>, use <b>Auto-formação</b> para preencher as vagas e escolher um líder. Para comparar dois míticos, abra a <b>Coleção</b>, filtre por raridade e ordene por <b>Força no nível 100</b>. A força atual mostra quem está mais forte hoje. A projeção compara as duas cópias no mesmo nível e entra no cálculo da autoformação.</li>
+      <li><strong>Use o ouro para melhorar os próximos encontros.</strong> Em <b>Upgrades</b>, <b>Sorte</b> aumenta a chance de encontrar um recruta em lutas comuns. <b>Rastreio de raros</b> aumenta a chance de esse recruta ser de raridade Rara ou superior.</li>
+      <li><strong>Avance para o próximo mundo.</strong> Em <b>Exploração</b>, marque <b>Avançar áreas, chefes e mundos</b>. O time muda de área ao atingir o nível necessário. Depois de 12 vitórias comuns ou de elite na última área, ele desafia o chefe e, ao vencer, segue para o próximo mundo. Escolher uma área ou mundo manualmente desliga essa opção. Marque-a de novo quando quiser continuar a campanha.</li>
+    </ol>
+    <p><strong>Quando encontrar uma cópia repetida</strong>, confira a versão e a trait (característica especial) na ficha. Se ativar a venda automática em <b>Configurações</b>, a primeira normal e a primeira shiny de cada personagem ficam protegidas. Os filtros de venda passam a valer para as próximas cópias.</p>
+    <p><strong>Se um inimigo estiver dando trabalho</strong>, confira a cor dele. No mapa abaixo, escolha <b>Defendendo</b> e selecione a cor do inimigo para descobrir quais cores causam mais dano contra ele.</p></section>
+    ${colorChart()}
     <h3>Funções</h3><ul><li><b>Combatente</b> · Ataque elevado e golpes básicos físicos.</li><li><b>Guardião</b> · Mais PV e defesa. Seus golpes básicos são físicos.</li><li><b>Mágico</b> · Usa Magia nos golpes básicos e enfrenta a Resistência do alvo.</li><li><b>Suporte</b> · Usa Magia nos golpes básicos. Na reserva da Arena, cura o aliado ativo.</li></ul>
     <h3>Formação e liderança</h3><p>Na exploração, os titulares lutam juntos. Na Arena, entra um por vez, na ordem das vagas ocupadas. Escolha o líder na Formação e consulte a ficha para ver quem recebe o bônus.</p>
     <h3>Raridade e traits</h3><p>${TIERS.join(' → ')}. Na ficha, você encontra a raridade, a versão Shiny e os bônus da trait de cada cópia.</p><h3>Traits e efeitos</h3><p>A chance indica quantos personagens recrutáveis, em média, correspondem a uma ocorrência da trait.</p><div class="trait-list">${TRAITS.map(t=>`<section><header><strong>${t.name}</strong><small>${t.rarity} · 1/${int.format(t.odds)} · ${(100/t.odds).toLocaleString('pt-BR',{maximumFractionDigits:3})}%</small></header><p>${traitEffects(t).slice(0,t.buffs.filter(Boolean).length).join(' · ')}</p>${t.passive?`<p>${t.passive}</p>`:''}</section>`).join('')}</div></article>`;
