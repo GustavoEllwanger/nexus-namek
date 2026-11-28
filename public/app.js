@@ -747,12 +747,12 @@ function renderProfile(){
           ${cur.length&&traitLocks>0?`<label class="caption">Travar trait (1 Selo): <select data-lock-select="${slot}"><option value="">Não travar</option>${cur.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join('')}</select></label><br>`:''}
           <button data-slot-action="reroll" data-slot="${slot}" ${!(state.traitItems>0)?'disabled':''}>Rolar · 1 token</button> <button data-slot-action="equipTraitSlot" data-slot="${slot}" ${!cur.length||slot===(unit.activeSlot??0)?'disabled':''}>Equipar</button></section>`;
         }).join('')}`:''}
-      ${names.includes('Made in Heaven')&&names.includes('Voto de Nen')?`<p>Combo · ${unit.nen?'8× dano · 2 vagas':'4× dano · 1 vaga'}</p>`:''}
+      ${names.includes('Made in Heaven')&&names.includes('Voto de Nen')?`<p>Combo · ${unit.nen?'+112% dano · 2 vagas':'+50% dano · 1 vaga'}</p>`:''}
       ${!publicUnit&&names.includes('Voto de Nen')?`<button class="ghost" data-nen="${unit.uid}" ${inTeam&&!unit.nen&&formationCost(state)>=4?'disabled':''}>${unit.nen?'Desativar Última Aposta':inTeam&&formationCost(state)>=4?'Libere uma vaga para ativar':'Ativar Última Aposta'}</button>`:''}
       ${bonuses.length?`<ul>${bonuses.map(bonus=>`<li>${bonus}</li>`).join('')}</ul>`:''}
     </section>
     <section class="card"><h3>Recrutamento</h3><p>${unit.odds?`Chance registrada no encontro · 1 em ${int.format(unit.odds)}`:'Integrante inicial'}</p>
-      ${unit.shiny?'<p class="caption">Shiny concede +25% a PV, Ataque, Magia, Defesa e Resistência.</p>':''}
+      ${unit.shiny?'<p class="caption">Shiny concede +12% a PV, Ataque, Magia, Defesa e Resistência.</p>':''}
     </section>
   </div>`;
   if(content===profileContent)return;
@@ -1158,7 +1158,7 @@ function renderPanel(){
       const searchValue=colFilter.search.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
       panel.innerHTML=`<article class="card"><div class="swap"><div><h2>Coleção</h2><p class="caption" id="collection-filtered-count"></p></div><label>Vaga de destino <select id="swap-target">${slotOptions}</select></label></div>
     <div class="collection-filters"><label class="search-field"><span>Buscar</span><input type="search" id="col-search" placeholder="Nome, universo ou trait" value="${searchValue}"></label><select id="col-sort" aria-label="Ordenar coleção"><option value="potential" ${colFilter.sort==='potential'?'selected':''}>Maior força no Nv. 100</option><option value="power" ${colFilter.sort==='power'?'selected':''}>Maior força atual</option><option value="level" ${colFilter.sort==='level'?'selected':''}>Maior nível</option><option value="tier" ${colFilter.sort==='tier'?'selected':''}>Maior raridade</option><option value="recent" ${colFilter.sort==='recent'?'selected':''}>Mais recente</option></select><select id="col-role" aria-label="Filtrar por função"><option value="">Todas funções</option>${['Guardião','Combatente','Mágico','Suporte'].map(r=>`<option value="${r}" ${colFilter.role===r?'selected':''}>${r}</option>`).join('')}</select><select id="col-tier" aria-label="Filtrar por raridade"><option value="">Todas raridades</option>${TIERS.map((t,i)=>`<option value="${i+1}" ${colFilter.tier===String(i+1)?'selected':''}>${t}</option>`).join('')}</select><label class="filter-check"><input type="checkbox" id="col-shiny" ${colFilter.shiny?'checked':''}> Shiny</label><label class="filter-check"><input type="checkbox" id="col-trait" ${colFilter.trait?'checked':''}> Com Trait</label></div>
-    <div class="bulk-tools"><label><input type="checkbox" id="col-locked" ${colFilter.locked?'checked':''}> Trancadas</label><label>Venda em lote <select id="bulk-mode"><option value="plain">Duplicatas sem trait</option><option value="common" ${bulkCommon?'selected':''}>Incluir trait até 1/25</option></select></label><button class="ghost" id="bulk-sell">Revisar lote</button></div><p class="caption">A venda em lote considera toda a coleção, até 200 cópias por vez. A melhor cópia de cada personagem, os Shiny, os titulares e as cópias trancadas ficam protegidos.</p>
+    <div class="bulk-tools"><label><input type="checkbox" id="col-locked" ${colFilter.locked?'checked':''}> Trancadas</label><label>Venda em lote <select id="bulk-mode"><option value="plain">Duplicatas sem trait</option><option value="common" ${bulkCommon?'selected':''}>Incluir trait Comum/Incomum</option></select></label><button class="ghost" id="bulk-sell">Revisar lote</button></div><p class="caption">A venda em lote considera toda a coleção, até 200 cópias por vez. A melhor cópia de cada personagem, os Shiny, os titulares e as cópias trancadas ficam protegidos.</p>
     <div class="collection-grid" id="collection-list"></div></article>`;
     }
     renderCollectionGrid();

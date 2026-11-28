@@ -43,7 +43,6 @@ function issueSerials(state,units,counter){
 return {serialSchema,issueSerials};
 })();
 const engine=(()=>{
-
 function hasTrait(unit,name){return unit.traits?.includes(name)||unit.trait===name;}
 const DEFAULT_LIMIT = 60000;
 const SAMPLE_STEP = 100;
@@ -60,7 +59,6 @@ function affinity(a, b) {
 }
 const distance = (a, b) => Math.hypot((a.x ?? a.slot * 20) - (b.x ?? b.slot * 20), (a.y ?? 50) - (b.y ?? 50));
 const MAIN_SKILLS = new Set(['piccolo','yamcha','kuririn','bulma','freeza-boss','ginyu','beam','rush','ward','heal']);
-
 class Combate {
   constructor(rosters, { mode = 'duelo', limit = DEFAULT_LIMIT } = {}) {
     if (!['duelo', 'equipe'].includes(mode) || !Number.isInteger(limit) || limit < SAMPLE_STEP || limit > DEFAULT_LIMIT || rosters.length !== 2 || rosters.some(team => !team.length || team.length > 4)) {
@@ -82,9 +80,16 @@ class Combate {
     this.log = [];
     this.hasteUntil=[0,0];
     for(const team of this.teams){
+      for(const u of team){
+        if(hasTrait(u,'Kaidō'))u.shield+=u.maxHp*.18;
+        if(hasTrait(u,'Domínio Absoluto')){u.shield+=u.maxHp*.25;u.domainWard=true;u.ccImmune=true;}
+      }
+    }
+    for(const team of this.teams){
       const king=team.find(u=>hasTrait(u,'Haki do Rei'));
       if(king)for(const foe of this.teams[1-king.side]){
-        foe.stunUntil=2000;foe.exposedUntil=2000;
+        if(foe.ccImmune){foe.ccImmune=false;}else{foe.stunUntil=1500;}
+        foe.exposedUntil=1500;
       }
     }
   }
@@ -99,13 +104,13 @@ class Combate {
 
   blocked(u){return u.stunUntil>this.time||(this.freezeUntil>this.time&&this.freezeOwner!==u);}
   pace(u){
-    if(u.hasteUntil>this.time)return .2;
-    return this.hasteUntil[u.side]>this.time?.6:1;
+    if(u.hasteUntil>this.time)return .65;
+    return this.hasteUntil[u.side]>this.time?.8:1;
   }
   beginAttack(u){
     if(!hasTrait(u,'Made in Heaven')||u.heavenUsed)return;
     const team=this.teams[u.side],before=team.map(f=>this.pace(f));
-    u.heavenUsed=true;u.hasteUntil=this.time+5000;this.hasteUntil[u.side]=this.time+5000;
+    u.heavenUsed=true;u.hasteUntil=this.time+4000;this.hasteUntil[u.side]=this.time+4000;
     team.forEach((f,i)=>{
       const ratio=this.pace(f)/before[i];
       if(f.nextBasic>this.time)f.nextBasic=this.time+(f.nextBasic-this.time)*ratio;
@@ -114,8 +119,9 @@ class Combate {
     this.record('aceleração',u);
   }
   outgoingPower(source,damage,basic=false){
-    const trait=Math.max(1,(hasTrait(source,'Made in Heaven')?4:0)+(source.nen?4:0));
-    return damage*trait*(basic&&source.weakenUntil>this.time?.65:1);
+    const heaven=hasTrait(source,'Made in Heaven')?1.25:1;
+    const nen=hasTrait(source,'Voto de Nen')?(source.nen?1.7:1.2):1;
+    return damage*heaven*nen*(basic&&source.weakenUntil>this.time?.65:1);
   }
 
   hit(source, target, attack = {}) {
@@ -127,7 +133,7 @@ class Combate {
     let victim = target,interceptFactor=1;
     if(!area&&!reflected){
       const guard=this.teams[target.side].find(u=>u!==target&&hasTrait(u,'Restrição Celestial')&&!this.blocked(u)&&this.alive(u)&&(u.guardUses??0)<2&&(this.mode==='duelo'||distance(u,target)<=30));
-      if(guard){guard.guardUses=(guard.guardUses??0)+1;victim=guard;interceptFactor=.5;this.record('intercepta',guard,target);}
+      if(guard){guard.guardUses=(guard.guardUses??0)+1;victim=guard;interceptFactor=.6;this.record('intercepta',guard,target);}
     }
     if (victim===target && !area && !reflected && this.mode === 'equipe') {
       const guard = this.teams[target.side].find(u => u !== target && !this.blocked(u) && this.alive(u) && u.intercept > 0 && u.protectUntil >= this.time && distance(u,target) <= 30);
@@ -152,7 +158,7 @@ class Combate {
       const mirror=magic&&this.teams[victim.side].find(u=>hasTrait(u,'Full Counter')&&!u.mirrorUsed&&this.alive(u)&&!this.blocked(u)&&(u===victim||this.mode==='duelo'||distance(u,victim)<=30));
       if(mirror){
         mirror.mirrorUsed=true;this.record('reflete',mirror,source);
-        this.hit(mirror,this.present(source)?source:this.active(source.side),{...attack,damage:damage*2,reflected:true});
+        this.hit(mirror,this.present(source)?source:this.active(source.side),{...attack,damage:damage*1.5,reflected:true});
         return true;
       }
       const vector = this.teams[victim.side].find(u => this.alive(u) && u.vector > 0 && u.vectorReady <= this.time && (this.mode === 'duelo' || Math.abs(u.slot - victim.slot) <= 1));
@@ -169,7 +175,7 @@ class Combate {
     const openPower = skill && !reflected && source.powerUntil > this.time;
     if (openPower) source.powerUntil = 0;
     const mitigation = (magic ? victim.resistance : victim.defense) * (1 - ignoreDefense);
-    let value = this.outgoingPower(source,damage,!skill) * interceptFactor * (victim.exposedUntil>this.time?1.3:1) * affinity(source.color,victim.color) * (openPower ? 1.3 : 1) * 40 / (40 + mitigation/(source.scale || 1));
+    let value = this.outgoingPower(source,damage,!skill) * interceptFactor * (victim.domainWard?.85:1) * (victim.exposedUntil>this.time?1.15:1) * affinity(source.color,victim.color) * (openPower ? 1.3 : 1) * 40 / (40 + mitigation/(source.scale || 1));
     if(source.kotoUntil>this.time && (skill || false)){
       source.kotoUntil=0;
       value*=.65;
@@ -198,8 +204,8 @@ class Combate {
   defeat(victim, source, blockRevive) {
     if (victim.survive > 0) {
       victim.survive--;
-      if(hasTrait(victim,"Zenkai")){victim.attack*=1.75;victim.magic*=1.75;}
-      victim.hp = victim.maxHp * .4;
+      if(hasTrait(victim,"Zenkai")){victim.attack*=1.25;victim.magic*=1.25;}
+      victim.hp = victim.maxHp * .3;
       this.record('sobrevive', victim, source, { remaining: victim.hp });
     } else if (victim.revive > 0 && !blockRevive) {
       victim.revive--;
@@ -228,9 +234,10 @@ class Combate {
     const used=this.cast(actor,target,type,role,launch);
     if(used&&actor.skill)this.record('especial',actor,target,{name:actor.skill,role});
     if(used&&role==='principal'&&hasTrait(actor,'The World')&&!actor.worldUsed){
-      actor.worldUsed=true;this.freezeOwner=actor;this.freezeUntil=this.time+3000;
-      actor.skillReady=0;actor.nextBasic=Math.min(actor.nextBasic,this.time+SAMPLE_STEP);
-      actor.ready=this.time/1000;this.record('tempo parado',actor);
+      actor.worldUsed=true;this.freezeOwner=actor;this.freezeUntil=this.time+2000;
+      actor.skillReady=this.time+Math.max(0,actor.skillReady-this.time)*.5;
+      actor.nextBasic=Math.min(actor.nextBasic,this.time+SAMPLE_STEP);
+      actor.ready=Math.min(actor.ready,actor.skillReady/1000);this.record('tempo parado',actor);
     }
     return used;
   }
@@ -496,7 +503,6 @@ class Combate {
 return {affinity,Combate};
 })();
 const communityRules=(()=>{
-
 // A daily period is keyed by the local calendar date on which its noon began.
 const DAILY_ZONE='America/Sao_Paulo';
 const GIFT_GOLD=10;
@@ -595,7 +601,6 @@ function weeklyCycle(now=Date.now()){
     index:Math.floor(monday/(7*86400000))
   };
 }
-
 const ARENA_LEAGUES=[
   {id:'bronze',name:'Bronze',min:0,color:'#cd9b6a',reward:{trophies:3,tokens:1,essence:1}},
   {id:'prata',name:'Prata',min:100,color:'#c9d4e4',reward:{trophies:6,tokens:2,essence:2}},
@@ -609,7 +614,6 @@ function arenaLeague(points=0){
   for(const l of ARENA_LEAGUES){if(points>=l.min)current=l;}
   return current;
 }
-
 const ARENA_SHOP=[
   {id:'token',name:'Token de reroll',desc:'Rola as traits de um slot.',cost:5,grant:{traitItems:1}},
   {id:'xpTome',name:'Tomo de XP',desc:'+25.000 XP instantâneo para um personagem.',cost:6,grant:{xpTome:1}},
@@ -617,7 +621,6 @@ const ARENA_SHOP=[
   {id:'catalyst',name:'Catalisador de Trait',desc:'Triplica chance de 2–3 traits e garante Rara+.',cost:15,grant:{catalyst:1}},
   {id:'traitLock',name:'Selo de Trava de Trait',desc:'Trava 1 trait atual durante o reroll.',cost:20,grant:{traitLock:1}},
 ];
-
 const GOLD_SHOP=[
   {id:'token',name:'Token de reroll',desc:'Preço sobe a cada compra na semana.',base:150000,step:75000,limit:10,grant:{traitItems:1}},
   {id:'essence',name:'Essência de Despertar',desc:'Desperta personagens sem precisar de cópia.',base:120000,step:40000,limit:10,grant:{essence:1}},
@@ -626,7 +629,6 @@ const GOLD_SHOP=[
   {id:'catalyst',name:'Catalisador de Trait',desc:'3× chance de 2–3 traits e mínimo Rara+.',base:350000,step:150000,limit:3,grant:{catalyst:1}},
   {id:'traitLock',name:'Selo de Trava de Trait',desc:'Mantém 1 trait escolhida ao rolar o slot.',base:500000,step:250000,limit:2,grant:{traitLock:1}},
 ];
-
 function rarityLabel(odds){
   const format=new Intl.NumberFormat('pt-BR',{maximumFractionDigits:2});
   for(const [divisor,suffix] of [[1e9,'B'],[1e6,'M'],[1e3,' mil']]){
@@ -679,9 +681,16 @@ class Combate {
     this.log = [];
     this.hasteUntil=[0,0];
     for(const team of this.teams){
+      for(const u of team){
+        if(hasTrait(u,'Kaidō'))u.shield+=u.maxHp*.18;
+        if(hasTrait(u,'Domínio Absoluto')){u.shield+=u.maxHp*.25;u.domainWard=true;u.ccImmune=true;}
+      }
+    }
+    for(const team of this.teams){
       const king=team.find(u=>hasTrait(u,'Haki do Rei'));
       if(king)for(const foe of this.teams[1-king.side]){
-        applyNegative(foe,'stunUntil',2000);applyNegative(foe,'exposedUntil',2000);
+        if(foe.ccImmune){foe.ccImmune=false;}else{applyNegative(foe,'stunUntil',1500);}
+        applyNegative(foe,'exposedUntil',1500);
       }
     }
   }
@@ -697,13 +706,13 @@ class Combate {
 
   blocked(u){return u.stunUntil>this.time||(this.freezeUntil>this.time&&this.freezeOwner!==u);}
   pace(u){
-    if(u.hasteUntil>this.time)return .2;
-    return this.hasteUntil[u.side]>this.time?.6:1;
+    if(u.hasteUntil>this.time)return .65;
+    return this.hasteUntil[u.side]>this.time?.8:1;
   }
   beginAttack(u){
     if(!hasTrait(u,'Made in Heaven')||u.heavenUsed)return;
     const team=this.teams[u.side],before=team.map(f=>this.pace(f));
-    u.heavenUsed=true;u.hasteUntil=this.time+5000;this.hasteUntil[u.side]=this.time+5000;
+    u.heavenUsed=true;u.hasteUntil=this.time+4000;this.hasteUntil[u.side]=this.time+4000;
     team.forEach((f,i)=>{
       const ratio=this.pace(f)/before[i];
       if(f.nextBasic>this.time)f.nextBasic=this.time+(f.nextBasic-this.time)*ratio;
@@ -712,9 +721,10 @@ class Combate {
     this.record('aceleração',u);
   }
   outgoingPower(source,damage,basic=false){
-    const trait=Math.max(1,(hasTrait(source,'Made in Heaven')?4:0)+(source.nen?4:0));
+    const heaven=hasTrait(source,'Made in Heaven')?1.25:1;
+    const nen=hasTrait(source,'Voto de Nen')?(source.nen?1.7:1.2):1;
     const rage=basic&&source.rageUntil>this.time?1+.08*source.rageBonus:1;
-    return damage*trait*rage*pucciMultiplier(source,this.time)*(basic&&source.invertedAttackUntil>this.time?1.35:1)*(basic&&source.weakenUntil>this.time?.65:1);
+    return damage*heaven*nen*rage*pucciMultiplier(source,this.time)*(basic&&source.invertedAttackUntil>this.time?1.35:1)*(basic&&source.weakenUntil>this.time?.65:1);
   }
 
   hit(source, target, attack = {}) {
@@ -727,7 +737,7 @@ class Combate {
     let victim = target,interceptFactor=1;
     if(!area&&!reflected&&!attack.ignoreIntercept&&!attack.skipIntercept){
       const guard=this.teams[target.side].find(u=>u!==target&&hasTrait(u,'Restrição Celestial')&&!this.blocked(u)&&this.alive(u)&&(u.guardUses??0)<2&&(this.mode==='duelo'||distance(u,target)<=30));
-      if(guard){guard.guardUses=(guard.guardUses??0)+1;victim=guard;interceptFactor=.5;this.record('intercepta',guard,target);}
+      if(guard){guard.guardUses=(guard.guardUses??0)+1;victim=guard;interceptFactor=.6;this.record('intercepta',guard,target);}
     }
     if (victim===target && !area && !reflected && !attack.ignoreIntercept && !attack.skipIntercept && this.mode === 'equipe') {
       const guard = this.teams[target.side].find(u => u !== target && !this.blocked(u) && this.alive(u) && u.intercept > 0 && u.protectUntil >= this.time && distance(u,target) <= 30);
@@ -819,7 +829,7 @@ class Combate {
       const mirror=magic&&this.teams[victim.side].find(u=>hasTrait(u,'Full Counter')&&!u.mirrorUsed&&this.alive(u)&&!this.blocked(u)&&(u===victim||this.mode==='duelo'||distance(u,victim)<=30));
       if(mirror){
         mirror.mirrorUsed=true;this.record('reflete',mirror,source);
-        this.hit(mirror,this.present(source)?source:this.active(source.side),{...attack,damage:damage*2,reflected:true});
+        this.hit(mirror,this.present(source)?source:this.active(source.side),{...attack,damage:damage*1.5,reflected:true});
         return true;
       }
       const ward=this.vectorPool??=[{ready:0},{ready:0}];
@@ -890,7 +900,7 @@ class Combate {
     }
     const charge=attack.interruptCharge&&this.arena?.secretCharges.find(e=>e.carrier===victim&&!e.bench&&!e.cancelled);
     const mitigation = (magic ? victim.resistance : victim.defense) * (1 - ignoreDefense);
-    let value = (attack.vectorPower??this.outgoingPower(source,damage,!skill)) * interceptFactor * (victim.exposedUntil>this.time?1.3:1) * affinity(source.color,victim.color) * (openPower ? 1.3 : 1) * 40 / (40 + mitigation/(source.scale || 1));
+    let value = (attack.vectorPower??this.outgoingPower(source,damage,!skill)) * interceptFactor * (victim.domainWard?.85:1) * (victim.exposedUntil>this.time?1.15:1) * affinity(source.color,victim.color) * (openPower ? 1.3 : 1) * 40 / (40 + mitigation/(source.scale || 1));
     if(elasticSave)value*=1-elastic.ratio;
     if(charge){
       charge.cancelled=true;
@@ -998,8 +1008,8 @@ class Combate {
   defeat(victim, source, blockRevive) {
     if (victim.survive > 0) {
       victim.survive--;
-      if(hasTrait(victim,"Zenkai")){victim.attack*=1.75;victim.magic*=1.75;}
-      victim.hp = victim.maxHp * .4;
+      if(hasTrait(victim,"Zenkai")){victim.attack*=1.25;victim.magic*=1.25;}
+      victim.hp = victim.maxHp * .3;
       this.record('sobrevive', victim, source, { remaining: victim.hp });
     } else if (victim.revive > 0 && !blockRevive) {
       victim.revive--;
@@ -1050,9 +1060,10 @@ class Combate {
     const used=this.cast(actor,target,type,role,launch);
     if(used&&actor.skill)this.record('especial',actor,target,{name:actor.skill,role});
     if(used&&role==='principal'&&hasTrait(actor,'The World')&&!actor.worldUsed){
-      actor.worldUsed=true;this.freezeOwner=actor;this.freezeUntil=this.time+3000;
-      actor.skillReady=0;actor.nextBasic=Math.min(actor.nextBasic,this.time+SAMPLE_STEP);
-      actor.ready=this.time/1000;this.record('tempo parado',actor);
+      actor.worldUsed=true;this.freezeOwner=actor;this.freezeUntil=this.time+2000;
+      actor.skillReady=this.time+Math.max(0,actor.skillReady-this.time)*.5;
+      actor.nextBasic=Math.min(actor.nextBasic,this.time+SAMPLE_STEP);
+      actor.ready=Math.min(actor.ready,actor.skillReady/1000);this.record('tempo parado',actor);
     }
     return used;
   }
@@ -2929,13 +2940,13 @@ function stepDuel(m){
     note(m,'Tempo esgotado · decisão pela média das frações de PV restantes.');
   }
 }
-return {collisionBonus,collisionPower,createDuel,finishDuel,stepDuel,pucciMultiplier,bossKits};
+
+return {collisionBonus,collisionPower,createDuel,finishDuel,stepDuel,pucciMultiplier,bossKits,BOSS_FINISH_FX};
 })();
 const game=(()=>{
 const {Combate,affinity}=engine;
 const {createDuel,finishDuel,bossKits}=duelEngine;
 const {dailyCycle,weeklyCycle,ARENA_SHOP,GOLD_SHOP}=communityRules;
-
 const AREAS = [
   { id:'entrada', name:'Costa de Namek', description:'Patrulhas do império rondam o litoral.', levels:[1,3], unlock:1, enemy:'Soldado da Tropa Freeza', base:[150,18,9,9], color:'Roxo' },
   { id:'meio', name:'Planícies Verdes', description:'O terreno aberto favorece as tropas de elite.', levels:[4,6], unlock:4, enemy:'Veterano da Tropa Freeza', base:[220,23,12,12], color:'Amarelo' },
@@ -3045,15 +3056,16 @@ const levelCap = state=>10*(1+(state.unlocked??0));
 const COLORS = {Verde:'#71dd9f',Laranja:'#ffab68',Amarelo:'#f5d66c',Azul:'#83baff',Branco:'#ecebff',Roxo:'#cc95ff',Rosa:'#f592bc',Preto:'#a8a2be',Vermelho:'#ff8290',Turquesa:'#70e1da',Dourado:'#ffe28a'};
 const TIERS = ['Comum','Incomum','Rara','Épica','Mítica','Divina','Secreta','Transcendente'];
 // PV, ataque, magia, defesa, resistência e velocidade no nível 1, antes da função.
+// Degrau de +22% a +30% por raridade, garantindo Tier N Normal < Tier N Shiny (+12%) < Tier N+1 Normal.
 const baseStats = [
   [100, 20, 20, 12, 12, 100],
-  [115, 23, 23, 14, 14, 101],
-  [133, 27, 27, 16, 16, 101],
-  [156, 31, 31, 19, 19, 102],
-  [188, 38, 38, 23, 23, 103],
-  [228, 46, 46, 28, 28, 104],
-  [278, 55, 55, 33, 33, 104],
-  [348, 70, 70, 42, 42, 106]
+  [122, 24, 24, 15, 15, 102],
+  [150, 30, 30, 18, 18, 104],
+  [185, 37, 37, 22, 22, 106],
+  [230, 46, 46, 28, 28, 109],
+  [290, 58, 58, 35, 35, 112],
+  [370, 74, 74, 44, 44, 116],
+  [480, 96, 96, 58, 58, 120]
 ];
 const roles = {Combatente:[.10,.25,-.15,0,0,0],Guardião:[.25,-.10,0,.25,.15,0],Mágico:[-.15,0,.30,0,.10,0],Suporte:[0,-.15,.15,0,.15,.05]};
 const roster = [
@@ -3360,7 +3372,6 @@ const approvedArt = {"hoova-shisui":"hoova-shisui","zawa-cheon":"zawa-cheon","ca
   "eternal-sailor-moon": "eternal-sailor-moon",
   "anos-voldigoad": "anos-voldigoad"
 };
-
 function spriteFor(unit){
   const slug=approvedArt[unit.id];
   if(!slug)return CHARACTERS[unit.id].sprite;
@@ -3412,19 +3423,38 @@ SKILL_EFFECTS.rush=SKILL_EFFECTS.yamcha;
 const recruitPools = TIERS.map((_,i)=>Object.values(CHARACTERS).filter(c=>c.tier===i+1));
 const chanceByTier = [.55,.27,.12,.045,.012,.0025,.00045,.00005];
 const passives={
-  'Haki do Rei':'Ao iniciar a luta, trava as ações inimigas por 2 s. Durante esse período, os inimigos recebem 30% mais dano. Uma ativação por equipe.',
-  'Instinto Superior':'Esquiva dos três primeiros golpes diretos de alvo único e contra-ataca o agressor se ele estiver em campo e o portador puder agir.',
-  'Restrição Celestial':'Intercepta os dois primeiros golpes de alvo único contra aliados próximos e sofre metade do dano. Na Arena, pode proteger o titular da reserva.',
-  'Haki da Observação':'Até duas vezes por luta, antecipa uma habilidade de alvo único com um golpe de 200% do dano básico. Eliminar o atacante cancela a habilidade.',
-  'Zenkai':'Uma vez por luta, sobrevive a um golpe fatal com 40% dos PV máximos e ganha +75% de Ataque e Magia até o fim do combate.',
-  'Full Counter':'Reflete a primeira habilidade mágica de alvo único que atingir o portador ou um aliado próximo. Devolve o dobro do dano-base da habilidade.',
-  'The World':'Após a primeira habilidade principal bem-sucedida, para o tempo por 3 s. Só o portador pode agir e sua habilidade fica pronta outra vez.',
-  'Voto de Nen':'Última Aposta é opcional. Ative na ficha para causar 4× o dano e ocupar duas vagas. Desative para voltar a usar uma vaga e conservar os bônus de atributos.',
-  'Made in Heaven':'Causa 4× o dano durante toda a luta e ocupa uma vaga. Na primeira ação ofensiva, ativa Aceleração do Tempo por 5 s. O intervalo de ações cai 80% para o portador e 40% para aliados. A aceleração coletiva não acumula.'
+  'Haki do Rei':'Ao iniciar a luta, trava as ações inimigas por 1,5 s e aumenta o dano sofrido por eles em +15%. Uma ativação por equipe.',
+  'Kaidō':'Inicia o combate com um escudo protetor equivalente a 18% dos PV máximos.',
+  'Instinto Superior':'Esquiva dos dois primeiros golpes diretos de alvo único e contra-ataca com um golpe básico se puder agir.',
+  'Restrição Celestial':'Intercepta os dois primeiros golpes de alvo único contra aliados próximos, sofrendo apenas 60% do dano. Na Arena, protege da reserva.',
+  'Zenkai':'Uma vez por luta, sobrevive a um golpe fatal com 30% dos PV máximos e ganha +25% de Ataque e Magia até o fim do combate.',
+  'Full Counter':'Reflete a primeira habilidade mágica de alvo único contra si ou um aliado próximo, devolvendo 150% do dano-base.',
+  'The World':'Após a primeira habilidade principal bem-sucedida, para o tempo por 2 s e reduz pela metade a recarga restante da habilidade.',
+  'Voto de Nen':'Concede +20% de dano em 1 vaga. Opcionalmente ative Última Aposta na ficha para causar +70% de dano ocupando 2 vagas.',
+  'Made in Heaven':'Causa +25% de dano durante toda a luta. Na primeira ação ofensiva, ativa Aceleração por 4 s (−35% intervalo no portador e −20% nos aliados).',
+  'Domínio Absoluto':'Inicia o combate com barreira de 25% dos PV máximos, reduz em 15% todo dano recebido e anula o primeiro atordoamento.'
 };
-const T=(name,odds,buffs)=>({name,odds,buffs,passive:passives[name]??null,
-  rarity:TIERS[odds<=5?0:odds<=10?1:odds<=25?2:odds<=50?3:odds<=125?4:odds<=250?5:odds<=1000?6:7]});
-const TRAITS = [T('Concentração Total',4,[.3,0,0,0,0,0]),T('Reforço Amaldiçoado',5,[0,.25,.25,0,0,0]),T('Haki do Armamento',10,[0,0,0,.4,0,0]),T('Ten',10,[0,0,0,0,.4,0]),T('Kaidō',20,[0,0,.35,0,.2,0]),T('Shunpo',20,[0,.2,0,0,0,.35]),T('Modo Sábio',25,[.35,0,0,.25,.25,0]),T('Respiração do Trovão',25,[0,.4,0,0,0,.25]),T('Haki do Rei',50,[.3,.5,.5,0,0,0]),T('Instinto Superior',100,[0,.4,.4,0,0,.5]),T('Restrição Celestial',125,[.6,0,0,.5,.5,0]),T('Haki da Observação',125,[0,.4,0,.4,0,0]),T('Zenkai',200,[.45,0,0,.35,0,0]),T('Full Counter',250,[0,0,0,.6,.6,0]),T('The World',500,[0,.6,.6,0,0,.4]),T('Voto de Nen',1000,[.6,0,0,.4,.4,0]),T('Made in Heaven',2000,[0,0,0,0,.5,0])];
+const TRAIT_MIGRATION={'Shunpo':'Respiração do Trovão','Haki da Observação':'Instinto Superior'};
+const T=(name,tier,odds,buffs)=>({name,tier,odds,buffs,passive:passives[name]??null,rarity:TIERS[tier-1]});
+// 16 Traits: exatamente 2 por raridade (Ofensiva/Ágil + Defensiva/Tática), estritamente crescentes de Comum a Transcendente.
+const TRAITS = [
+  T('Concentração Total',1,6,[.05,.02,.02,.04,.04,0]),
+  T('Reforço Amaldiçoado',1,6,[.03,.05,.05,.02,.02,.02]),
+  T('Haki do Armamento',2,14,[.07,.08,.05,.08,.06,.02]),
+  T('Ten',2,14,[.07,.05,.08,.06,.08,.02]),
+  T('Modo Sábio',3,30,[.11,.09,.10,.10,.10,.05]),
+  T('Respiração do Trovão',3,30,[.09,.12,.11,.08,.08,.08]),
+  T('Haki do Rei',4,60,[.13,.16,.16,.11,.11,.08]),
+  T('Kaidō',4,60,[.15,.13,.14,.14,.14,.09]),
+  T('Instinto Superior',5,120,[.17,.20,.20,.14,.14,.13]),
+  T('Restrição Celestial',5,120,[.20,.16,.16,.18,.18,.10]),
+  T('Zenkai',6,250,[.23,.24,.24,.18,.18,.14]),
+  T('Full Counter',6,250,[.21,.22,.24,.23,.23,.14]),
+  T('The World',7,600,[.27,.30,.30,.23,.23,.18]),
+  T('Voto de Nen',7,600,[.30,.27,.27,.26,.26,.16]),
+  T('Made in Heaven',8,1500,[.34,.36,.36,.28,.28,.24]),
+  T('Domínio Absoluto',8,1500,[.38,.33,.33,.34,.34,.20]),
+];
 const initial = ['piccolo','yamcha','kuririn','bulma'];
 const position = [[72,47],[56,72],[39,28],[22,59]];
 const HOUR = 3600000;
@@ -3456,7 +3486,6 @@ const readyForBoss = state=>state.team.length>0 && state.finalWins>=(state.bossG
 const upgradeLevel = (state,id)=>state.upgrades?.[id]??(id==='ritmo'&&state.upgraded?1:0);
 const upgradeValue = (state,id)=>UPGRADES[id].values[upgradeLevel(state,id)];
 const waitFor = state=>upgradeValue(state,'ritmo')*1000;
-
 function buyUpgrade(state,id){
   if(!Object.hasOwn(UPGRADES,id))return false;
   const level=upgradeLevel(state,id);
@@ -3466,7 +3495,6 @@ function buyUpgrade(state,id){
   (state.upgrades??={})[id]=level+1;
   return true;
 }
-
 function fresh(now=Date.now(),seed=Date.now()>>>0){
   const collection = initial.map(id=>({uid:`initial-${id}`,id,xp:0,serial:1,shiny:false,trait:null,odds:null}));
   return {version:1,seed,created:now,collection,team:collection.map(x=>x.uid),positions:Object.fromEntries(collection.map((x,i)=>[x.uid,position[i]])),leader:collection[0].uid,area:0,gold:0,wins:0,losses:0,finalWins:0,streak:0,upgrades:{},completed:false,world:0,unlocked:0,journey:{},autoRoutes:true,paused:false,running:true,nextAt:now,waitDuration:0,pending:null,index:0,clock:now,log:[]};
@@ -3477,7 +3505,6 @@ function leaderBuff(leader,member){
   if(!leader)return [];
   return [member.role,member.color,member.universe,'Equipe'].includes(leader.scope)?leader.leadership:[];
 }
-
 const MAX_STARS=5;
 const TRAIT_PITY_LIMIT=25;
 const PRESET_SLOTS=['exploracao','arena','torre','raid'];
@@ -3511,7 +3538,6 @@ const WEEKLY_TOWER_RULES=[
   {id:'cool',name:'Cores Frias',desc:'Apenas Verde, Turquesa, Azul, Roxo, Branco ou Preto.',allow:c=>['Verde','Turquesa','Azul','Roxo','Branco','Preto'].includes(c.color)},
   {id:'tactical',name:'Guardiões & Suportes',desc:'Apenas Guardiões e Suportes entram em campo.',allow:c=>['Guardião','Suporte'].includes(c.role)},
 ];
-
 function grantItems(state,bundle){
   if(!bundle)return;
   if(bundle.gold)state.gold=(state.gold??0)+bundle.gold;
@@ -3524,7 +3550,6 @@ function grantItems(state,bundle){
     }
   }
 }
-
 function awakenCost(unit){
   const card=CHARACTERS[unit?.id];
   const stars=Math.max(0,Math.min(MAX_STARS,unit?.stars??0));
@@ -3536,7 +3561,6 @@ function awakenCost(unit){
     essence:next*Math.max(1,card.tier-3)
   };
 }
-
 function dexMastery(state){
   if(!state)return {charTiers:0,shinyTiers:0,allBonus:0,offenseBonus:0,goldBonus:0,completedUniverses:[],universes:[]};
   const {characters,totals}=dexSummary(state);
@@ -3560,10 +3584,9 @@ function dexMastery(state){
     universes
   };
 }
-
 function slotTraits(unit,index=unit.activeSlot??0){
   const stored=unit.traitSlots?.[index]??(index===0&&unit.trait?[unit.trait]:[]);
-  return Array.isArray(stored)?[...new Set(stored)].filter(name=>TRAITS.some(t=>t.name===name)).slice(0,3):[];
+  return Array.isArray(stored)?[...new Set(stored.map(n=>TRAIT_MIGRATION[n]??n))].filter(name=>TRAITS.some(t=>t.name===name)).slice(0,3):[];
 }
 function pickWeightedTrait(random,pool){
   let weight=random()*pool.reduce((n,t)=>n+1/t.odds,0);
@@ -3580,15 +3603,15 @@ function rollLoadout(random,{lockTrait=null,catalyst=false,pity=false}={}){
   }else{
     count=multiRoll<0.05?(multiRoll<0.0005?3:2):1;
   }
-  const basePool=catalyst?TRAITS.filter(t=>t.odds>=20):TRAITS.slice();
+  const basePool=catalyst?TRAITS.filter(t=>t.tier>=3):TRAITS.slice();
   const pool=basePool.slice(),picked=[];
   if(lockTrait&&TRAITS.some(t=>t.name===lockTrait)){
     picked.push(lockTrait);
     const idx=pool.findIndex(t=>t.name===lockTrait);
     if(idx>=0)pool.splice(idx,1);
   }
-  if(pity&&!picked.some(n=>(TRAITS.find(t=>t.name===n)?.odds??0)>=100)){
-    const mythicPool=pool.filter(t=>t.odds>=100);
+  if(pity&&!picked.some(n=>(TRAITS.find(t=>t.name===n)?.tier??0)>=5)){
+    const mythicPool=pool.filter(t=>t.tier>=5);
     if(mythicPool.length){
       const chosen=pickWeightedTrait(random,mythicPool);
       picked.push(chosen.name);
@@ -3632,7 +3655,7 @@ function changeTraitSlot(state,action){
     state.traitItems--;
     if(useCatalyst)state.items.catalyst--;
     if(lockTrait)state.items.traitLock--;
-    const hitMythic=rolled.some(n=>(TRAITS.find(t=>t.name===n)?.odds??0)>=100);
+    const hitMythic=rolled.some(n=>(TRAITS.find(t=>t.name===n)?.tier??0)>=5);
     state.traitPity=hitMythic?0:(state.traitPity??0)+1;
   }else{
     if(!slots[slot].length||slot===(unit.activeSlot??0))return false;
@@ -3660,10 +3683,10 @@ function fighter(unit, coords=[55,50], leader=null, tactical=false, mastery=null
   const [hp,attack,magic,defense,resistance,speed]=baseStats[card.tier-1].map((base,i)=>{
     const mBoost=1+globalBonus+(i<=2?offBonus:0);
     const sBoost=i===5?(stars>=5?starMult*1.05:starMult):starMult;
-    return Math.round(base*(1+roles[card.role][i])*(1+(starterBonus[card.id]?.[i]||0))*(1+buffs.reduce((sum,b)=>sum+b[i],0))*(1+(aura[i]||0))*sBoost*mBoost*(i===5?1:growth*(unit.shiny?1.25:1)));
+    return Math.round(base*(1+roles[card.role][i])*(1+(starterBonus[card.id]?.[i]||0))*(1+buffs.reduce((sum,b)=>sum+b[i],0))*(1+(aura[i]||0))*sBoost*mBoost*(i===5?1:growth*(unit.shiny?1.12:1)));
   });
   const [x,y]=coords;
-  return {...card,stars,signatureAssist:card.tier>=5&&card.role==='Suporte', uid:unit.uid,trait:unit.trait,traits:names,nen:names.includes("Voto de Nen")&&unit.nen===true, level, x,y,hp,attack,magic,defense,resistance,speed,scale:growth,interval:tactical?Math.max(600,Math.round(300000/speed/100)*100):3000,magicBasic:card.role==='Mágico'||card.role==='Suporte',evade:names.includes('Instinto Superior')?3:0,survive:names.includes('Zenkai')?1:0,sprite:spriteFor(unit)};
+  return {...card,stars,signatureAssist:card.tier>=5&&card.role==='Suporte', uid:unit.uid,trait:unit.trait,traits:names,nen:names.includes("Voto de Nen")&&unit.nen===true, level, x,y,hp,attack,magic,defense,resistance,speed,scale:growth,interval:tactical?Math.max(600,Math.round(300000/speed/100)*100):3000,magicBasic:card.role==='Mágico'||card.role==='Suporte',evade:names.includes('Instinto Superior')?2:0,survive:names.includes('Zenkai')?1:0,sprite:spriteFor(unit)};
 }
 
 function chachaBlock(keyWords, counter, nonce0, nonce1){
@@ -3737,7 +3760,6 @@ function rollRecruit(random,luck=.10,universe='Dragon Ball',rarePercent=UPGRADES
   const traitP=trait?1/trait.odds:1-TRAITS.reduce((sum,t)=>sum+1/t.odds,0);
   return {id:card.id,shiny,trait:trait?.name??null,odds:Math.round(1/(chance*weights[tier-1]*cardChance*(shiny?shinyP:1-shinyP)*traitP))};
 }
-
 const SALE_PRICES=[8,20,50,125,350,1000,3500,12000];
 const RECOVERY_MS=20000;
 function readyAt(state,uid){
@@ -3755,7 +3777,6 @@ const enemyBonuses = [
   {hp:.15, damage:.12, bossHp:.35, bossDamage:.22},
   {hp:.20, damage:.16, bossHp:.50, bossDamage:.32}
 ];
-
 function makeBattle(state,start,boss=false,towerFloor=0){
   const random=rng(state.seed,state.index++);
   const encounterWorld=towerFloor?(towerFloor-1)%WORLDS.length:state.world??0;
@@ -3806,7 +3827,6 @@ function shareExperience(state,battle,xp){
   }
   return granted;
 }
-
 function saleSettings(saved){
   // Older backups can contain only the filters that were configured.
   const list=value=>Array.isArray(value)?value:[];
@@ -3886,7 +3906,6 @@ function settle(state,battle){
   state.log=[entry,...state.log].slice(0,25);
   return entry;
 }
-
 function advance(state,now,budget=null,encounterLimit=Infinity){
   if(typeof budget==='number'){encounterLimit=budget;budget=null;}
   if(state.autoSell)state.autoSell=saleSettings(state.autoSell);
@@ -3952,7 +3971,6 @@ function advance(state,now,budget=null,encounterLimit=Infinity){
   state.clock=now;
   return entries;
 }
-
 const AWAY_THRESHOLD=10*60*1000;
 const AFK_ENCOUNTER_LIMIT=2400;
 function newWindow(state,start){
@@ -4022,14 +4040,12 @@ function advanceWithPresence(state,now,observedAt=null,budget=null){
   run(now);
   return all;
 }
-
 function startExploration(state,now){
   if(state.pending?.boss||state.running)return false;
   state.running=true;
   if(!state.pending)state.nextAt=Math.max(now,state.nextAt);
   return true;
 }
-
 const TOWER_LIMIT=30;
 const towerPrize=floor=>floor%10===0?3:floor%5===0?2:1;
 function towerAffix(floor){
@@ -4165,11 +4181,9 @@ function challenge(state,now){
   state.pending=makeBattle(state,now,true);
   return true;
 }
-
 function formationSlots(state){
   return state.slots??Array.from({length:4},(_,i)=>state.team[i]??null);
 }
-
 function formationCost(state,slots=state.team){
   return slots.reduce((n,uid)=>n+(uid?(state.collection.find(u=>u.uid===uid)?.nen?2:1):0),0);
 }
@@ -4245,7 +4259,6 @@ function applyFormationPreset(state, preset='padrao'){
   ordered.forEach((uid,i)=>{state.positions[uid]=coords[i].slice();});
   return true;
 }
-
 function autoFormation(state, mode='power', now=Date.now()){
   if(!['power','projected','balanced','area'].includes(mode)||!state.collection.length)return false;
   const enemyColor=worldOf(state).areas[state.area]?.color;
@@ -4369,7 +4382,6 @@ function dexSummary(state){
     }
   };
 }
-
 function canSellUnit(state, uid){
   if(!uid||state.collection.length<=1||state.team.includes(uid))return false;
   const unit=state.collection.find(u=>u.uid===uid);
@@ -4406,7 +4418,6 @@ function duplicateSellCandidates(state,{includeCommonTraits=false}={}){
   }
   return candidates;
 }
-
 function sellUnit(state, uid){
   if(!canSellUnit(state,uid))return false;
   hydrateAwayRecruits(state);
@@ -4428,7 +4439,6 @@ function sellUnit(state, uid){
   }
   return gold;
 }
-
 function goldShopPrice(item,bought=0){
   return item.base+item.step*bought;
 }
@@ -4513,7 +4523,6 @@ function applySuggestedFormation(state,action,now){
   if(wasEmpty&&!state.pending)state.nextAt=now;
   return true;
 }
-
 function applyGameAction(state,action,now){
   switch(action?.type){
     case 'lock': return toggleLock(state,action.uid,action.locked);
@@ -4662,7 +4671,7 @@ function applyGameAction(state,action,now){
   }
 }
 
-return {AREAS,BOSS,WORLDS,worldOf,levelCap,COLORS,TIERS,spriteFor,CHARACTERS,SKILL_EFFECTS,TRAITS,UPGRADES,xpFor,levelAt,xpProgress,maxLevel,readyForBoss,upgradeLevel,waitFor,buyUpgrade,fresh,MAX_STARS,TRAIT_PITY_LIMIT,PRESET_SLOTS,PRESET_LABELS,RAID_MILESTONES,WORLD_BOSS_MILESTONES,TOWER_AFFIXES,WEEKLY_TOWER_FLOORS,WEEKLY_TOWER_RULES,grantItems,awakenCost,dexMastery,slotTraits,loadoutChance,fighter,recruitRates,rollRecruit,SALE_PRICES,RECOVERY_MS,readyAt,makeBattle,saleSettings,advance,AWAY_THRESHOLD,AFK_ENCOUNTER_LIMIT,advanceWithPresence,startExploration,TOWER_LIMIT,towerPrize,towerAffix,raidToday,weeklyTowerToday,towerEnemies,weeklyTowerEnemies,challenge,formationSlots,formationCost,equip,unitPower,formationPower,projectedPower,leaderApplies,applyFormationPreset,autoFormation,dexSummary,canSellUnit,duplicateSellCandidates,sellUnit,goldShopPrice,resolveDefenseSquad,applyGameAction};
+return {AREAS,BOSS,WORLDS,worldOf,levelCap,COLORS,TIERS,spriteFor,CHARACTERS,SKILL_EFFECTS,TRAIT_MIGRATION,TRAITS,UPGRADES,xpFor,levelAt,xpProgress,maxLevel,readyForBoss,upgradeLevel,waitFor,buyUpgrade,fresh,MAX_STARS,TRAIT_PITY_LIMIT,PRESET_SLOTS,PRESET_LABELS,RAID_MILESTONES,WORLD_BOSS_MILESTONES,TOWER_AFFIXES,WEEKLY_TOWER_FLOORS,WEEKLY_TOWER_RULES,grantItems,awakenCost,dexMastery,slotTraits,loadoutChance,fighter,recruitRates,rollRecruit,SALE_PRICES,RECOVERY_MS,readyAt,makeBattle,saleSettings,advance,AWAY_THRESHOLD,AFK_ENCOUNTER_LIMIT,advanceWithPresence,startExploration,TOWER_LIMIT,towerPrize,towerAffix,raidToday,weeklyTowerToday,towerEnemies,weeklyTowerEnemies,challenge,formationSlots,formationCost,equip,unitPower,formationPower,projectedPower,leaderApplies,applyFormationPreset,autoFormation,dexSummary,canSellUnit,duplicateSellCandidates,sellUnit,goldShopPrice,resolveDefenseSquad,applyGameAction};
 })();
 const {serialSchema,issueSerials} =serials;
 const {advance,advanceWithPresence,applyGameAction,fighter,fresh,CHARACTERS,dexMastery,resolveDefenseSquad,WORLD_BOSS_MILESTONES} =game;

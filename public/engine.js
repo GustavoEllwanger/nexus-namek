@@ -36,9 +36,16 @@ export class Combate {
     this.log = [];
     this.hasteUntil=[0,0];
     for(const team of this.teams){
+      for(const u of team){
+        if(hasTrait(u,'Kaidō'))u.shield+=u.maxHp*.18;
+        if(hasTrait(u,'Domínio Absoluto')){u.shield+=u.maxHp*.25;u.domainWard=true;u.ccImmune=true;}
+      }
+    }
+    for(const team of this.teams){
       const king=team.find(u=>hasTrait(u,'Haki do Rei'));
       if(king)for(const foe of this.teams[1-king.side]){
-        foe.stunUntil=2000;foe.exposedUntil=2000;
+        if(foe.ccImmune){foe.ccImmune=false;}else{foe.stunUntil=1500;}
+        foe.exposedUntil=1500;
       }
     }
   }
@@ -53,13 +60,13 @@ export class Combate {
 
   blocked(u){return u.stunUntil>this.time||(this.freezeUntil>this.time&&this.freezeOwner!==u);}
   pace(u){
-    if(u.hasteUntil>this.time)return .2;
-    return this.hasteUntil[u.side]>this.time?.6:1;
+    if(u.hasteUntil>this.time)return .65;
+    return this.hasteUntil[u.side]>this.time?.8:1;
   }
   beginAttack(u){
     if(!hasTrait(u,'Made in Heaven')||u.heavenUsed)return;
     const team=this.teams[u.side],before=team.map(f=>this.pace(f));
-    u.heavenUsed=true;u.hasteUntil=this.time+5000;this.hasteUntil[u.side]=this.time+5000;
+    u.heavenUsed=true;u.hasteUntil=this.time+4000;this.hasteUntil[u.side]=this.time+4000;
     team.forEach((f,i)=>{
       const ratio=this.pace(f)/before[i];
       if(f.nextBasic>this.time)f.nextBasic=this.time+(f.nextBasic-this.time)*ratio;
@@ -68,8 +75,9 @@ export class Combate {
     this.record('aceleração',u);
   }
   outgoingPower(source,damage,basic=false){
-    const trait=Math.max(1,(hasTrait(source,'Made in Heaven')?4:0)+(source.nen?4:0));
-    return damage*trait*(basic&&source.weakenUntil>this.time?.65:1);
+    const heaven=hasTrait(source,'Made in Heaven')?1.25:1;
+    const nen=hasTrait(source,'Voto de Nen')?(source.nen?1.7:1.2):1;
+    return damage*heaven*nen*(basic&&source.weakenUntil>this.time?.65:1);
   }
 
   hit(source, target, attack = {}) {
@@ -81,7 +89,7 @@ export class Combate {
     let victim = target,interceptFactor=1;
     if(!area&&!reflected){
       const guard=this.teams[target.side].find(u=>u!==target&&hasTrait(u,'Restrição Celestial')&&!this.blocked(u)&&this.alive(u)&&(u.guardUses??0)<2&&(this.mode==='duelo'||distance(u,target)<=30));
-      if(guard){guard.guardUses=(guard.guardUses??0)+1;victim=guard;interceptFactor=.5;this.record('intercepta',guard,target);}
+      if(guard){guard.guardUses=(guard.guardUses??0)+1;victim=guard;interceptFactor=.6;this.record('intercepta',guard,target);}
     }
     if (victim===target && !area && !reflected && this.mode === 'equipe') {
       const guard = this.teams[target.side].find(u => u !== target && !this.blocked(u) && this.alive(u) && u.intercept > 0 && u.protectUntil >= this.time && distance(u,target) <= 30);
@@ -106,7 +114,7 @@ export class Combate {
       const mirror=magic&&this.teams[victim.side].find(u=>hasTrait(u,'Full Counter')&&!u.mirrorUsed&&this.alive(u)&&!this.blocked(u)&&(u===victim||this.mode==='duelo'||distance(u,victim)<=30));
       if(mirror){
         mirror.mirrorUsed=true;this.record('reflete',mirror,source);
-        this.hit(mirror,this.present(source)?source:this.active(source.side),{...attack,damage:damage*2,reflected:true});
+        this.hit(mirror,this.present(source)?source:this.active(source.side),{...attack,damage:damage*1.5,reflected:true});
         return true;
       }
       const vector = this.teams[victim.side].find(u => this.alive(u) && u.vector > 0 && u.vectorReady <= this.time && (this.mode === 'duelo' || Math.abs(u.slot - victim.slot) <= 1));
@@ -123,7 +131,7 @@ export class Combate {
     const openPower = skill && !reflected && source.powerUntil > this.time;
     if (openPower) source.powerUntil = 0;
     const mitigation = (magic ? victim.resistance : victim.defense) * (1 - ignoreDefense);
-    let value = this.outgoingPower(source,damage,!skill) * interceptFactor * (victim.exposedUntil>this.time?1.3:1) * affinity(source.color,victim.color) * (openPower ? 1.3 : 1) * 40 / (40 + mitigation/(source.scale || 1));
+    let value = this.outgoingPower(source,damage,!skill) * interceptFactor * (victim.domainWard?.85:1) * (victim.exposedUntil>this.time?1.15:1) * affinity(source.color,victim.color) * (openPower ? 1.3 : 1) * 40 / (40 + mitigation/(source.scale || 1));
     if(source.kotoUntil>this.time && (skill || false)){
       source.kotoUntil=0;
       value*=.65;
@@ -152,8 +160,8 @@ export class Combate {
   defeat(victim, source, blockRevive) {
     if (victim.survive > 0) {
       victim.survive--;
-      if(hasTrait(victim,"Zenkai")){victim.attack*=1.75;victim.magic*=1.75;}
-      victim.hp = victim.maxHp * .4;
+      if(hasTrait(victim,"Zenkai")){victim.attack*=1.25;victim.magic*=1.25;}
+      victim.hp = victim.maxHp * .3;
       this.record('sobrevive', victim, source, { remaining: victim.hp });
     } else if (victim.revive > 0 && !blockRevive) {
       victim.revive--;
@@ -182,9 +190,10 @@ export class Combate {
     const used=this.cast(actor,target,type,role,launch);
     if(used&&actor.skill)this.record('especial',actor,target,{name:actor.skill,role});
     if(used&&role==='principal'&&hasTrait(actor,'The World')&&!actor.worldUsed){
-      actor.worldUsed=true;this.freezeOwner=actor;this.freezeUntil=this.time+3000;
-      actor.skillReady=0;actor.nextBasic=Math.min(actor.nextBasic,this.time+SAMPLE_STEP);
-      actor.ready=this.time/1000;this.record('tempo parado',actor);
+      actor.worldUsed=true;this.freezeOwner=actor;this.freezeUntil=this.time+2000;
+      actor.skillReady=this.time+Math.max(0,actor.skillReady-this.time)*.5;
+      actor.nextBasic=Math.min(actor.nextBasic,this.time+SAMPLE_STEP);
+      actor.ready=Math.min(actor.ready,actor.skillReady/1000);this.record('tempo parado',actor);
     }
     return used;
   }

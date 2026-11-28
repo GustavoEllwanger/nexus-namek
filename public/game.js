@@ -111,15 +111,16 @@ export const levelCap = state=>10*(1+(state.unlocked??0));
 export const COLORS = {Verde:'#71dd9f',Laranja:'#ffab68',Amarelo:'#f5d66c',Azul:'#83baff',Branco:'#ecebff',Roxo:'#cc95ff',Rosa:'#f592bc',Preto:'#a8a2be',Vermelho:'#ff8290',Turquesa:'#70e1da',Dourado:'#ffe28a'};
 export const TIERS = ['Comum','Incomum','Rara','Épica','Mítica','Divina','Secreta','Transcendente'];
 // PV, ataque, magia, defesa, resistência e velocidade no nível 1, antes da função.
+// Degrau de +22% a +30% por raridade, garantindo Tier N Normal < Tier N Shiny (+12%) < Tier N+1 Normal.
 const baseStats = [
   [100, 20, 20, 12, 12, 100],
-  [115, 23, 23, 14, 14, 101],
-  [133, 27, 27, 16, 16, 101],
-  [156, 31, 31, 19, 19, 102],
-  [188, 38, 38, 23, 23, 103],
-  [228, 46, 46, 28, 28, 104],
-  [278, 55, 55, 33, 33, 104],
-  [348, 70, 70, 42, 42, 106]
+  [122, 24, 24, 15, 15, 102],
+  [150, 30, 30, 18, 18, 104],
+  [185, 37, 37, 22, 22, 106],
+  [230, 46, 46, 28, 28, 109],
+  [290, 58, 58, 35, 35, 112],
+  [370, 74, 74, 44, 44, 116],
+  [480, 96, 96, 58, 58, 120]
 ];
 const roles = {Combatente:[.10,.25,-.15,0,0,0],Guardião:[.25,-.10,0,.25,.15,0],Mágico:[-.15,0,.30,0,.10,0],Suporte:[0,-.15,.15,0,.15,.05]};
 const roster = [
@@ -478,19 +479,38 @@ SKILL_EFFECTS.rush=SKILL_EFFECTS.yamcha;
 const recruitPools = TIERS.map((_,i)=>Object.values(CHARACTERS).filter(c=>c.tier===i+1));
 const chanceByTier = [.55,.27,.12,.045,.012,.0025,.00045,.00005];
 const passives={
-  'Haki do Rei':'Ao iniciar a luta, trava as ações inimigas por 2 s. Durante esse período, os inimigos recebem 30% mais dano. Uma ativação por equipe.',
-  'Instinto Superior':'Esquiva dos três primeiros golpes diretos de alvo único e contra-ataca o agressor se ele estiver em campo e o portador puder agir.',
-  'Restrição Celestial':'Intercepta os dois primeiros golpes de alvo único contra aliados próximos e sofre metade do dano. Na Arena, pode proteger o titular da reserva.',
-  'Haki da Observação':'Até duas vezes por luta, antecipa uma habilidade de alvo único com um golpe de 200% do dano básico. Eliminar o atacante cancela a habilidade.',
-  'Zenkai':'Uma vez por luta, sobrevive a um golpe fatal com 40% dos PV máximos e ganha +75% de Ataque e Magia até o fim do combate.',
-  'Full Counter':'Reflete a primeira habilidade mágica de alvo único que atingir o portador ou um aliado próximo. Devolve o dobro do dano-base da habilidade.',
-  'The World':'Após a primeira habilidade principal bem-sucedida, para o tempo por 3 s. Só o portador pode agir e sua habilidade fica pronta outra vez.',
-  'Voto de Nen':'Última Aposta é opcional. Ative na ficha para causar 4× o dano e ocupar duas vagas. Desative para voltar a usar uma vaga e conservar os bônus de atributos.',
-  'Made in Heaven':'Causa 4× o dano durante toda a luta e ocupa uma vaga. Na primeira ação ofensiva, ativa Aceleração do Tempo por 5 s. O intervalo de ações cai 80% para o portador e 40% para aliados. A aceleração coletiva não acumula.'
+  'Haki do Rei':'Ao iniciar a luta, trava as ações inimigas por 1,5 s e aumenta o dano sofrido por eles em +15%. Uma ativação por equipe.',
+  'Kaidō':'Inicia o combate com um escudo protetor equivalente a 18% dos PV máximos.',
+  'Instinto Superior':'Esquiva dos dois primeiros golpes diretos de alvo único e contra-ataca com um golpe básico se puder agir.',
+  'Restrição Celestial':'Intercepta os dois primeiros golpes de alvo único contra aliados próximos, sofrendo apenas 60% do dano. Na Arena, protege da reserva.',
+  'Zenkai':'Uma vez por luta, sobrevive a um golpe fatal com 30% dos PV máximos e ganha +25% de Ataque e Magia até o fim do combate.',
+  'Full Counter':'Reflete a primeira habilidade mágica de alvo único contra si ou um aliado próximo, devolvendo 150% do dano-base.',
+  'The World':'Após a primeira habilidade principal bem-sucedida, para o tempo por 2 s e reduz pela metade a recarga restante da habilidade.',
+  'Voto de Nen':'Concede +20% de dano em 1 vaga. Opcionalmente ative Última Aposta na ficha para causar +70% de dano ocupando 2 vagas.',
+  'Made in Heaven':'Causa +25% de dano durante toda a luta. Na primeira ação ofensiva, ativa Aceleração por 4 s (−35% intervalo no portador e −20% nos aliados).',
+  'Domínio Absoluto':'Inicia o combate com barreira de 25% dos PV máximos, reduz em 15% todo dano recebido e anula o primeiro atordoamento.'
 };
-const T=(name,odds,buffs)=>({name,odds,buffs,passive:passives[name]??null,
-  rarity:TIERS[odds<=5?0:odds<=10?1:odds<=25?2:odds<=50?3:odds<=125?4:odds<=250?5:odds<=1000?6:7]});
-export const TRAITS = [T('Concentração Total',4,[.3,0,0,0,0,0]),T('Reforço Amaldiçoado',5,[0,.25,.25,0,0,0]),T('Haki do Armamento',10,[0,0,0,.4,0,0]),T('Ten',10,[0,0,0,0,.4,0]),T('Kaidō',20,[0,0,.35,0,.2,0]),T('Shunpo',20,[0,.2,0,0,0,.35]),T('Modo Sábio',25,[.35,0,0,.25,.25,0]),T('Respiração do Trovão',25,[0,.4,0,0,0,.25]),T('Haki do Rei',50,[.3,.5,.5,0,0,0]),T('Instinto Superior',100,[0,.4,.4,0,0,.5]),T('Restrição Celestial',125,[.6,0,0,.5,.5,0]),T('Haki da Observação',125,[0,.4,0,.4,0,0]),T('Zenkai',200,[.45,0,0,.35,0,0]),T('Full Counter',250,[0,0,0,.6,.6,0]),T('The World',500,[0,.6,.6,0,0,.4]),T('Voto de Nen',1000,[.6,0,0,.4,.4,0]),T('Made in Heaven',2000,[0,0,0,0,.5,0])];
+export const TRAIT_MIGRATION={'Shunpo':'Respiração do Trovão','Haki da Observação':'Instinto Superior'};
+const T=(name,tier,odds,buffs)=>({name,tier,odds,buffs,passive:passives[name]??null,rarity:TIERS[tier-1]});
+// 16 Traits: exatamente 2 por raridade (Ofensiva/Ágil + Defensiva/Tática), estritamente crescentes de Comum a Transcendente.
+export const TRAITS = [
+  T('Concentração Total',1,6,[.05,.02,.02,.04,.04,0]),
+  T('Reforço Amaldiçoado',1,6,[.03,.05,.05,.02,.02,.02]),
+  T('Haki do Armamento',2,14,[.07,.08,.05,.08,.06,.02]),
+  T('Ten',2,14,[.07,.05,.08,.06,.08,.02]),
+  T('Modo Sábio',3,30,[.11,.09,.10,.10,.10,.05]),
+  T('Respiração do Trovão',3,30,[.09,.12,.11,.08,.08,.08]),
+  T('Haki do Rei',4,60,[.13,.16,.16,.11,.11,.08]),
+  T('Kaidō',4,60,[.15,.13,.14,.14,.14,.09]),
+  T('Instinto Superior',5,120,[.17,.20,.20,.14,.14,.13]),
+  T('Restrição Celestial',5,120,[.20,.16,.16,.18,.18,.10]),
+  T('Zenkai',6,250,[.23,.24,.24,.18,.18,.14]),
+  T('Full Counter',6,250,[.21,.22,.24,.23,.23,.14]),
+  T('The World',7,600,[.27,.30,.30,.23,.23,.18]),
+  T('Voto de Nen',7,600,[.30,.27,.27,.26,.26,.16]),
+  T('Made in Heaven',8,1500,[.34,.36,.36,.28,.28,.24]),
+  T('Domínio Absoluto',8,1500,[.38,.33,.33,.34,.34,.20]),
+];
 const initial = ['piccolo','yamcha','kuririn','bulma'];
 const position = [[72,47],[56,72],[39,28],[22,59]];
 const HOUR = 3600000;
@@ -629,7 +649,7 @@ export function dexMastery(state){
 
 export function slotTraits(unit,index=unit.activeSlot??0){
   const stored=unit.traitSlots?.[index]??(index===0&&unit.trait?[unit.trait]:[]);
-  return Array.isArray(stored)?[...new Set(stored)].filter(name=>TRAITS.some(t=>t.name===name)).slice(0,3):[];
+  return Array.isArray(stored)?[...new Set(stored.map(n=>TRAIT_MIGRATION[n]??n))].filter(name=>TRAITS.some(t=>t.name===name)).slice(0,3):[];
 }
 function pickWeightedTrait(random,pool){
   let weight=random()*pool.reduce((n,t)=>n+1/t.odds,0);
@@ -646,15 +666,15 @@ function rollLoadout(random,{lockTrait=null,catalyst=false,pity=false}={}){
   }else{
     count=multiRoll<0.05?(multiRoll<0.0005?3:2):1;
   }
-  const basePool=catalyst?TRAITS.filter(t=>t.odds>=20):TRAITS.slice();
+  const basePool=catalyst?TRAITS.filter(t=>t.tier>=3):TRAITS.slice();
   const pool=basePool.slice(),picked=[];
   if(lockTrait&&TRAITS.some(t=>t.name===lockTrait)){
     picked.push(lockTrait);
     const idx=pool.findIndex(t=>t.name===lockTrait);
     if(idx>=0)pool.splice(idx,1);
   }
-  if(pity&&!picked.some(n=>(TRAITS.find(t=>t.name===n)?.odds??0)>=100)){
-    const mythicPool=pool.filter(t=>t.odds>=100);
+  if(pity&&!picked.some(n=>(TRAITS.find(t=>t.name===n)?.tier??0)>=5)){
+    const mythicPool=pool.filter(t=>t.tier>=5);
     if(mythicPool.length){
       const chosen=pickWeightedTrait(random,mythicPool);
       picked.push(chosen.name);
@@ -698,7 +718,7 @@ function changeTraitSlot(state,action){
     state.traitItems--;
     if(useCatalyst)state.items.catalyst--;
     if(lockTrait)state.items.traitLock--;
-    const hitMythic=rolled.some(n=>(TRAITS.find(t=>t.name===n)?.odds??0)>=100);
+    const hitMythic=rolled.some(n=>(TRAITS.find(t=>t.name===n)?.tier??0)>=5);
     state.traitPity=hitMythic?0:(state.traitPity??0)+1;
   }else{
     if(!slots[slot].length||slot===(unit.activeSlot??0))return false;
@@ -726,10 +746,10 @@ export function fighter(unit, coords=[55,50], leader=null, tactical=false, maste
   const [hp,attack,magic,defense,resistance,speed]=baseStats[card.tier-1].map((base,i)=>{
     const mBoost=1+globalBonus+(i<=2?offBonus:0);
     const sBoost=i===5?(stars>=5?starMult*1.05:starMult):starMult;
-    return Math.round(base*(1+roles[card.role][i])*(1+(starterBonus[card.id]?.[i]||0))*(1+buffs.reduce((sum,b)=>sum+b[i],0))*(1+(aura[i]||0))*sBoost*mBoost*(i===5?1:growth*(unit.shiny?1.25:1)));
+    return Math.round(base*(1+roles[card.role][i])*(1+(starterBonus[card.id]?.[i]||0))*(1+buffs.reduce((sum,b)=>sum+b[i],0))*(1+(aura[i]||0))*sBoost*mBoost*(i===5?1:growth*(unit.shiny?1.12:1)));
   });
   const [x,y]=coords;
-  return {...card,stars,signatureAssist:card.tier>=5&&card.role==='Suporte', uid:unit.uid,trait:unit.trait,traits:names,nen:names.includes("Voto de Nen")&&unit.nen===true, level, x,y,hp,attack,magic,defense,resistance,speed,scale:growth,interval:tactical?Math.max(600,Math.round(300000/speed/100)*100):3000,magicBasic:card.role==='Mágico'||card.role==='Suporte',evade:names.includes('Instinto Superior')?3:0,survive:names.includes('Zenkai')?1:0,sprite:spriteFor(unit)};
+  return {...card,stars,signatureAssist:card.tier>=5&&card.role==='Suporte', uid:unit.uid,trait:unit.trait,traits:names,nen:names.includes("Voto de Nen")&&unit.nen===true, level, x,y,hp,attack,magic,defense,resistance,speed,scale:growth,interval:tactical?Math.max(600,Math.round(300000/speed/100)*100):3000,magicBasic:card.role==='Mágico'||card.role==='Suporte',evade:names.includes('Instinto Superior')?2:0,survive:names.includes('Zenkai')?1:0,sprite:spriteFor(unit)};
 }
 
 function chachaBlock(keyWords, counter, nonce0, nonce1){
