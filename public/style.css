@@ -363,3 +363,54 @@ button.dex-card:hover,button.dex-card:focus-visible{border-color:#9de2c7;backgro
 .player-banner[data-background="zawa"],.scene-grid .scene-choice[data-background="zawa"]{background:linear-gradient(90deg,#090b19cc,transparent 85%),url("art/banner-zawa.webp") center/cover}
 
 .player-banner[data-background="careca"],.scene-grid .scene-choice[data-background="careca"]{background:linear-gradient(90deg,#090b19cc,transparent 85%),url("art/banner-careca.webp") center/cover}
+
+/* Endgame UI additions */
+.star-seal{display:inline-block;margin-inline-start:.4em;color:#f5d66c;font-size:.82em;letter-spacing:.04em;vertical-align:middle}
+.league-tag{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:.78rem;font-weight:700;background:#1b1e29;border:1px solid var(--league-color,#5f6478);color:var(--league-color,#d7dced)}
+.presets-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
+.preset-slots{display:flex;flex-wrap:wrap;gap:8px}
+.preset-slot{display:inline-flex;align-items:center;gap:4px;padding:4px 6px;border:1px solid #2b2d38;border-radius:8px;background:#111218}
+.preset-slot strong{font-size:.82rem;padding:0 4px}
+.preset-slot button{padding:4px 8px;font-size:.78rem}
+.defense-picker{display:inline-flex;align-items:center;gap:6px;font-size:.85rem}
+.mastery-card{margin-bottom:14px}
+.mastery-stats{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.mastery-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:8px;margin-top:10px}
+.mastery-uni{padding:8px 10px;border:1px solid #2a2c38;border-radius:8px;background:#101218}
+.mastery-uni.complete{border-color:#6ed8a6;background:#0e1d17}
+.mastery-uni header{display:flex;justify-content:space-between;gap:6px;font-size:.82rem;margin-bottom:6px}
+.mastery-uni .meter{height:6px;margin:0}
+.items-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin:12px 0}
+.item-box{display:flex;flex-direction:column;justify-content:space-between;gap:8px;padding:12px;border:1px solid #2a2c38;border-radius:8px;background:#101218}
+.item-box header{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.item-box h3{margin:0;font-size:.98rem}
+.item-qty{font-weight:750;color:var(--mint);font-variant-numeric:tabular-nums}
+.shop-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-top:12px}
+.shop-row{display:flex;flex-direction:column;justify-content:space-between;gap:8px;padding:12px;border:1px solid #2c2e3a;border-radius:8px;background:#0f1116}
+.shop-row header{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.shop-row h4{margin:0;font-size:.95rem}
+.arena-shop-list{display:grid;gap:8px;margin:10px 0}
+.arena-shop-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid #2b2e3a;border-radius:8px;background:#101218}
+.arena-shop-item div{min-width:0}
+.arena-shop-item h4{margin:0;font-size:.88rem}
+.arena-shop-item small{color:#b2b6c4;display:block;font-size:.76rem}
+.milestone-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin:10px 0;padding:0;list-style:none}
+.milestone-item{padding:8px 10px;border:1px solid #2c2e3a;border-radius:8px;background:#101218;font-size:.82rem}
+.milestone-item.done{border-color:#6ed8a6;background:#0e1d17}
+.milestone-item strong{display:block;margin-bottom:3px}
+.world-boss-card{margin-top:12px}
+.affix-pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:.8rem;background:#1b1829;border:1px solid #6b5aa8;color:#dfd4ff}
+.rule-banner{padding:10px 12px;border-radius:8px;border:1px solid #35394a;background:#11141d;margin:10px 0}
+.rule-banner.ok{border-color:#5cc998}
+.rule-banner.warn{border-color:#d9826c}
+.awaken-box{margin-top:10px;padding-top:10px;border-top:1px solid #2d2f3c}
+.awaken-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
+.pity-bar{margin:8px 0}
+.pity-bar small{display:block;margin-bottom:4px;color:#b8bcc8}
+.reroll-opts{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0;font-size:.84rem}
+.arena-history{margin-top:14px;padding-top:12px;border-top:1px solid #2c2e3a}
+.history-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:8px}
+.history-list{list-style:none;padding:0;margin:6px 0 0;display:grid;gap:6px}
+.history-list li{display:flex;justify-content:space-between;gap:8px;font-size:.82rem;padding:6px 8px;border:1px solid #252733;border-radius:6px;background:#101218}
+.history-list .win{color:#81e6b3}.history-list .loss{color:#ff9494}
+.season-banner{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border:1px solid #3b3754;border-radius:8px;background:#151221;margin:8px 0}

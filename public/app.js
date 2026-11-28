@@ -1,6 +1,7 @@
 import {unitLabel} from './unit-label.js';
 import {affinity} from "./engine.js";
-import {autoFormation,dexSummary,duplicateSellCandidates,loadoutChance,slotTraits,raidToday,towerEnemies,saleSettings,canSellUnit,formationCost,leaderApplies,RECOVERY_MS,SALE_PRICES,readyAt,formationSlots,spriteFor,recruitRates,formationPower,projectedPower,unitPower,WORLDS,worldOf,levelCap,CHARACTERS,COLORS,SKILL_EFFECTS,TIERS,TRAITS,UPGRADES,AWAY_THRESHOLD,AFK_ENCOUNTER_LIMIT,advanceWithPresence,advance,applyGameAction,fighter,fresh,levelAt,maxLevel,readyForBoss,upgradeLevel,waitFor,xpProgress} from './game.js';
+import {ARENA_SHOP,GOLD_SHOP,weeklyCycle,arenaLeague} from './community-rules.js';
+import {MAX_STARS,TRAIT_PITY_LIMIT,PRESET_SLOTS,PRESET_LABELS,RAID_MILESTONES,WEEKLY_TOWER_FLOORS,awakenCost,dexMastery,towerAffix,weeklyTowerToday,weeklyTowerEnemies,goldShopPrice,autoFormation,dexSummary,duplicateSellCandidates,loadoutChance,slotTraits,raidToday,towerEnemies,saleSettings,canSellUnit,formationCost,leaderApplies,RECOVERY_MS,SALE_PRICES,readyAt,formationSlots,spriteFor,recruitRates,formationPower,projectedPower,unitPower,WORLDS,worldOf,levelCap,CHARACTERS,COLORS,SKILL_EFFECTS,TIERS,TRAITS,UPGRADES,AWAY_THRESHOLD,AFK_ENCOUNTER_LIMIT,advanceWithPresence,advance,applyGameAction,fighter,fresh,levelAt,maxLevel,readyForBoss,upgradeLevel,waitFor,xpProgress} from './game.js';
 import * as previousDuel from './duel-v2.js';
 import * as frozenDuel from './duel-v3.js';
 import {paintTranscendentes} from './arena-fx.js';
@@ -79,9 +80,11 @@ async function listOpponents(){
     }
   }catch(error){if(request===opponentRequest)list.textContent=error.message;}
 }
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let viewingRun=null,requestingRun=false,raidClock=null;
 let rankedMessage='';
 let rankedState=null,rankedFetch=null,rankedBusy=false,rankedRetry=0;
+let arenaLogData=null,arenaLogUntil=0,worldBossData=null,worldBossUntil=0;
 const boards=new Map();
 let buyingToken=false,shopMessage='';
 function competitionKind(){return tab==='arena'?'arena':tab==='modos'?'tower':null;}
@@ -89,11 +92,14 @@ function drawCompetition(){
   const kind=competitionKind(),side=$('#competition-side');
   side.hidden=!kind;if(!kind)return;
   const player=community.playerId(),isArena=kind==='arena';
-  $('#board-title').textContent=isArena?'Top 10 · Arena':'Top 10 · Torre infinita';
+  $('#board-title').textContent=isArena?'Top 10 · Arena (Temporada)':'Top 10 · Torre infinita';
   $('#arena-market').hidden=!isArena;
   const balance=state.arenaTrophies??0;
   $('#trophy-balance').textContent=int.format(balance)+(balance===1?' troféu':' troféus');
-  $('#arena-buy').disabled=!player||buyingToken||balance<5;
+  const shopList=$('#arena-shop-list');
+  if(shopList){
+    shopList.innerHTML=ARENA_SHOP.map(item=>`<div class="arena-shop-item"><div><h4>${item.name}</h4><small>${item.desc} · ${item.cost} troféus</small></div><button class="primary" data-arena-buy="${item.id}" ${!player||buyingToken||balance<item.cost?'disabled':''}>${item.cost} ★</button></div>`).join('');
+  }
   $('#shop-message').textContent=shopMessage;
   const key=player+'/'+kind;
   const record=boards.get(key)??{until:0};
@@ -113,35 +119,62 @@ function drawCompetition(){
   list.entries=rows;list.boardKey=key;list.replaceChildren();
   for(const [index,row] of (rows??[]).entries()){
     const li=document.createElement('li'),pos=document.createElement('small'),name=document.createElement('span'),score=document.createElement('strong');
-    pos.textContent=String(index+1).padStart(2,'0');name.textContent=row.name;
+    pos.textContent=String(index+1).padStart(2,'0');
+    name.textContent=isArena?`${row.name} (${arenaLeague(row.score).name})`:row.name;
     score.textContent=(isArena?'':'Andar ')+int.format(row.score)+(isArena?' pts':'');
     li.classList.toggle('own-rank',row.id===player);li.append(pos,name,score);list.append(li);
   }
 }
-async function buyArenaToken(){
+async function buyArenaShopItem(itemId='token'){
   const player=community.playerId();
-  if(!player||buyingToken||tab!=='arena'||(state.arenaTrophies??0)<5)return;
+  const item=ARENA_SHOP.find(x=>x.id===itemId);
+  if(!player||!item||buyingToken||tab!=='arena'||(state.arenaTrophies??0)<item.cost)return;
   buyingToken=true;shopMessage='';drawCompetition();
   try{
-    const ok=await transaction({type:'arenaShop',purchase:state.arenaPurchases??0});
-    if(player===community.playerId())shopMessage=ok?'Token adicionado aos Itens.':'Confira o saldo e o inventário antes de tentar novamente.';
+    const ok=await transaction({type:'arenaShop',itemId:item.id,purchase:state.arenaPurchases??0});
+    if(player===community.playerId())shopMessage=ok?`${item.name} adicionado aos Itens.`:'Confira o saldo e o inventário antes de tentar novamente.';
   }finally{buyingToken=false;drawCompetition();}
+}
+function refreshArenaLog(){
+  const id=community.playerId();
+  if(!id||Date.now()<arenaLogUntil)return;
+  arenaLogUntil=Infinity;
+  const generation=community.generation();
+  community.arenaLog().then(data=>{if(community.generation()!==generation)return;arenaLogData=data;arenaLogUntil=Date.now()+30000;if(tab==='arena')renderArenaHistory();})
+    .catch(()=>{if(community.generation()===generation)arenaLogUntil=Date.now()+15000;});
+}
+function refreshWorldBoss(){
+  const id=community.playerId();
+  if(!id||Date.now()<worldBossUntil)return;
+  worldBossUntil=Infinity;
+  const generation=community.generation();
+  community.worldBoss().then(data=>{if(community.generation()!==generation)return;worldBossData=data;worldBossUntil=Date.now()+30000;if(tab==='modos'&&mode==='raid')renderModes($('#panel'));})
+    .catch(()=>{if(community.generation()===generation)worldBossUntil=Date.now()+15000;});
+}
+function renderArenaHistory(){
+  const box=$('#arena-history');if(!box)return;
+  if(!community.ready()){box.hidden=true;return;}
+  box.hidden=false;
+  if(!arenaLogData){box.innerHTML='<h3>Histórico de batalhas e defesas</h3><p class="caption">Carregando histórico…</p>';return;}
+  const fmtAtk=arenaLogData.attacks.length?arenaLogData.attacks.map(a=>`<li><span>vs <b>${esc(a.rivalName)}</b> · ${a.day}</span><strong class="${a.result==='Vitória'?'win':a.result==='Derrota'?'loss':''}">${a.result} (${a.delta>=0?'+':''}${a.delta} pts${a.trophies?` · +${a.trophies}★`:''})</strong></li>`).join(''):'<li><span>Nenhum ataque recente.</span></li>';
+  const fmtDef=arenaLogData.defenses.length?arenaLogData.defenses.map(d=>`<li><span>de <b>${esc(d.attackerName)}</b> · ${d.day}</span><strong class="${d.defended?'win':'loss'}">${d.defended?'Defesa vencida':'Derrota na defesa'}</strong></li>`).join(''):'<li><span>Nenhuma defesa registrada ainda.</span></li>';
+  box.innerHTML=`<h3>Histórico de batalhas e defesas</h3><div class="history-cols"><div><small>Seus ataques</small><ul class="history-list">${fmtAtk}</ul></div><div><small>Defesas recebidas</small><ul class="history-list">${fmtDef}</ul></div></div>`;
 }
 function refreshRanked(){
   const id=community.playerId();
   if(!id||rankedFetch||Date.now()<rankedRetry)return;
   rankedFetch=community.ranked().then(data=>{
-    if(community.playerId()===id){rankedState=data;if(rankedRetry){rankedMessage='';rankedRetry=0;}}
+    if(community.playerId()===id){rankedState=data;if(rankedRetry){rankedMessage='';rankedRetry=0;}if(tab==='arena')updateDuelButton();}
   }).catch(error=>{if(community.playerId()===id){rankedRetry=Date.now()+10000;rankedMessage=error.message;note(error.message);}}).finally(()=>{rankedFetch=null;});
 }
 async function enterRanked(){
   if(rankedBusy||requestingRun||duel?.result===null||!rankedState||rankedState.used>=5)return;
   const id=community.playerId();
-  rankedBusy=true;rankedMessage='Buscando adversário…';updateDuelButton();
+  rankedBusy=true;rankedMessage='Buscando adversário equilibrado…';updateDuelButton();
   try{
     const {run,status}=await community.ranked({day:rankedState.day,attempt:rankedState.used+1});
     if(id!==community.playerId())return;
-    rankedMessage='';rankedState=status;boards.delete(id+'/arena');
+    rankedMessage='';rankedState=status;boards.delete(id+'/arena');arenaLogUntil=0;
     void transaction(null).then(drawCompetition);
     if(tab==='arena')watchRun(run);
     else note(run.result+' na Arena · '+run.delta+' pontos');
@@ -186,7 +219,7 @@ function switchFight(key){
 const arenaReplay={4:{createDuel,stepDuel,finishDuel},3:frozenDuel,2:previousDuel};
 function replayRules(run){return arenaReplay[run.physics]??legacyDuel}
 function watchRun(run){
-  if(!run.ranked)mode=run.raid?'raid':'tower';
+  if(!run.ranked)mode=run.raid?'raid':run.weekly?'weeklyTower':'tower';
   tab=run.ranked?'arena':'modos';
   switchFight(run.ranked?'arena':mode);
   viewingRun=run;rival=null;
@@ -201,15 +234,21 @@ async function enterChallenge(type){
   try{
     const sequence=state.ballSequence??0;
     const account=state.created;
-    const ok=await transaction({type,sequence,day:raidInfo().day,floor:(state.towerCleared??0)+1});
+    const wt=weeklyTowerToday(gameNow());
+    const weeklyFloor=(state.weeklyTower?.week===wt.week?state.weeklyTower.cleared:0)+1;
+    const payload=type==='weeklyTower'
+      ?{type,sequence,week:wt.week,floor:weeklyFloor}
+      :{type,sequence,day:raidInfo().day,floor:(state.towerCleared??0)+1};
+    const ok=await transaction(payload);
     if(state.created!==account)return;
     if(ok&&state.ballRun?.sequence===sequence+1){
       if(type==='tower'&&state.ballRun.result==='Vitória')boards.delete(community.playerId()+'/tower');
+      if(type==='raid')worldBossUntil=0;
       if(type==='tower'){liveTowerSequence=sequence+1;towerAdvanceAt=0;floorPage=null;}
       watchRun(state.ballRun);
     }else{
       if(type==='tower'){autoTower=false;liveTowerSequence=null;}
-      note('Desafio indisponível. Confira as tentativas, o acesso à Torre e a recuperação do time.');
+      note('Desafio indisponível. Confira as tentativas, a regra semanal, o acesso à Torre e a recuperação do time.');
     }
   }finally{requestingRun=false;if(tab==='modos')renderPanel();}
 }
@@ -226,18 +265,19 @@ function startDuel(){
 }
 function duelPanel(panel,challenge=false){
   if(!panel.querySelector('#duel-field')){
-    panel.innerHTML='<article class="card duel-card">'+(challenge?'':'<h2>Arena das bolas</h2><p class="caption">As bolas saem em direções sorteadas e ricocheteiam nas paredes. Especiais ofensivos precisam alcançar o adversário. Cada acerto por colisão soma 12 pontos percentuais ao bônus de dano da próxima colisão, até +40%. As reservas ajudam conforme a recarga de cada habilidade e entram na ordem da formação. Aos dois minutos, vence a equipe com mais PV proporcionais restantes.</p><section id="ranked-section" class="challenge-picker"><h3>Arena ranqueada</h3><p class="caption">Vitórias contra formações mais fortes valem mais pontos. Contra força equivalente, uma vitória vale +20 e uma derrota vale −10. Empates valem 0.</p><p id="ranked-info"></p><button class="primary" id="arena-ranked">Sortear adversário e lutar</button></section><button class="ghost" id="arena-find">Escolher amistoso · sem pontos</button><div id="arena-opponents" aria-live="polite"></div>')+'<strong id="duel-rival"></strong><h3 id="duel-outcome" role="status" hidden></h3><div id="skill-banner" aria-live="polite"></div><div id="duel-field"><i></i><i></i><span class="arena-call" hidden></span><span class="arena-call foe-call" hidden></span><canvas class="arena-vfx" width="800" height="400" aria-hidden="true"></canvas><div class="damage-popups" aria-hidden="true"></div></div><div id="duel-teams"></div><p role="status" id="duel-status"></p><div id="duel-log"></div><ul id="damage-feed" aria-label="Últimos golpes"></ul><button class="primary" id="duel-skip">Pular para o resultado</button> <button class="primary" id="duel-start"></button> <button class="ghost" id="duel-train">Voltar ao treino</button></article>';
+    panel.innerHTML='<article class="card duel-card">'+(challenge?'':'<h2>Arena das bolas</h2><p class="caption">As bolas saem em direções sorteadas e ricocheteiam nas paredes. Especiais ofensivos precisam alcançar o adversário. Cada acerto por colisão soma 12 pontos percentuais ao bônus de dano da próxima colisão, até +40%. As reservas ajudam conforme a recarga de cada habilidade e entram na ordem da formação. Aos dois minutos, vence a equipe com mais PV proporcionais restantes.</p><section id="ranked-section" class="challenge-picker"><h3>Arena ranqueada · Temporada semanal</h3><p class="caption">Matchmaking por faixa de força (±25%). Temporadas renovam toda segunda às 12h de Brasília com recompensas por Liga.</p><div id="season-banner" class="season-banner" hidden></div><p id="ranked-info"></p><button class="primary" id="arena-ranked">Sortear adversário equilibrado e lutar</button></section><button class="ghost" id="arena-find">Escolher amistoso · sem pontos</button><div id="arena-opponents" aria-live="polite"></div>')+'<strong id="duel-rival"></strong><h3 id="duel-outcome" role="status" hidden></h3><div id="skill-banner" aria-live="polite"></div><div id="duel-field"><i></i><i></i><span class="arena-call" hidden></span><span class="arena-call foe-call" hidden></span><canvas class="arena-vfx" width="800" height="400" aria-hidden="true"></canvas><div class="damage-popups" aria-hidden="true"></div></div><div id="duel-teams"></div><p role="status" id="duel-status"></p><div id="duel-log"></div><ul id="damage-feed" aria-label="Últimos golpes"></ul><button class="primary" id="duel-skip">Pular para o resultado</button> <button class="primary" id="duel-start"></button> <button class="ghost" id="duel-train">Voltar ao treino</button>'+(challenge?'':'<section id="arena-history" class="arena-history" hidden></section>')+'</article>';
   }
   if(challenge){
     $('#duel-start').hidden=true;$('#duel-train').hidden=true;
     $('#duel-skip').hidden=duel?.result!==null;
-    $('#duel-rival').textContent=(viewingRun.raid?'Raid':'Andar '+viewingRun.floor)+' · '+viewingRun.right[0].name;
+    $('#duel-rival').textContent=(viewingRun.raid?'Raid':viewingRun.weekly?'Torre semanal · Andar '+viewingRun.floor:'Andar '+viewingRun.floor)+(viewingRun.affix?' · '+viewingRun.affix:'')+' · '+viewingRun.right[0].name;
     paintDuel();return;
   }
   $('#arena-find').hidden=!community?.ready();
   $('#arena-find').disabled=!!duel&&duel.result===null;
   $('#duel-rival').textContent=viewingRun?.ranked?'Ranqueada · '+viewingRun.rivalName:viewingRun?(viewingRun.raid?'Chefe do dia':'Torre · andar '+viewingRun.floor)+' · '+viewingRun.right[0].name:rival?'Amistoso contra '+rival.name:community?.ready()?'Arena de jogadores':'Treino solo · Equipe de Namek. Entre na Comunidade para desafiar jogadores.';
   updateDuelButton();
+  if(community?.ready()){refreshArenaLog();renderArenaHistory();}
   paintDuel();
 }
 function updateDuelButton(){
@@ -246,7 +286,14 @@ function updateDuelButton(){
   $('#ranked-section').hidden=!community.ready();
   if(community.ready()){
     if(!rankedState||rankedState.day!==info.day)refreshRanked();
-    $('#ranked-info').textContent=rankedMessage||(rankedState?rankedState.points+' pontos · '+(5-rankedState.used)+'/5 tentativas até as 12h de Brasília. O sorteio já conta como partida.':'Consultando classificação…');
+    const league=rankedState?.league??arenaLeague(rankedState?.points??0);
+    const sb=$('#season-banner');
+    if(sb&&rankedState){
+      sb.hidden=false;
+      const prevBtn=rankedState.prevSeason?`<button type="button" class="primary" id="claim-arena-season">Resgatar Liga ${rankedState.prevSeason.league.name} (${rankedState.prevSeason.season})</button>`:'';
+      sb.innerHTML=`<span>Liga atual: <b class="league-tag" style="--league-color:${league.color}">${league.name}</b> · Temporada ${rankedState.season??''} · Prêmio ao final: +${league.reward.trophies}★, +${league.reward.tokens} tokens, +${league.reward.essence} essências</span>${prevBtn}`;
+    }
+    $('#ranked-info').textContent=rankedMessage||(rankedState?rankedState.points+' pontos na temporada · '+(5-rankedState.used)+'/5 tentativas até as 12h de Brasília.':'Consultando classificação…');
     $('#arena-ranked').disabled=rankedBusy||requestingRun||playing||!state.team.length||!rankedState||rankedState.day!==info.day||rankedState.used>=5;
   }
   $('#duel-skip').hidden=!playing;
@@ -403,6 +450,7 @@ const community=createCommunity({spriteURL,onChallenge(profile){
   const restoreForm=$('#account-restore');
   restoreForm.reset();restoreForm.hidden=true;
   autoTower=false;liveTowerSequence=null;towerAdvanceAt=0;
+  arenaLogData=null;arenaLogUntil=0;worldBossData=null;worldBossUntil=0;
   boards.clear();shopMessage='';savedFights.clear();floorPage=null;rankedMessage='';rankedRetry=0;rankedState=null;duel=null;rival=null;viewingRun=null;raidClock=null;opponentRequest++;$('#arena-opponents')?.replaceChildren();
   state=data?.state??load()??fresh(Date.now(),crypto.getRandomValues(new Uint32Array(1))[0]);
   arenaRecovery=loadArenaRecovery();
@@ -569,7 +617,19 @@ let bulkCommon=false;
 function lockButton(u){return `<button class="ghost" data-lock-copy="${u.uid}" aria-pressed="${!!u.locked}">${u.locked?'Destrancar':'Trancar'}</button>`;}
 function renderDex(panel){
   const {characters,traits,totals}=dexSummary(state);
+  const mastery=dexMastery(state);
   const owned=characters.filter(c=>c.count).length;
+  const masteryCard=`<article class="card mastery-card"><h2>Maestria de Conta</h2><p class="caption">Descobrir personagens e variantes Shiny fortalece toda a sua conta permanentemente.</p>
+    <div class="mastery-stats">
+      <span class="stat-pill">Atributos globais <strong>+${Math.round(mastery.allBonus*100)}%</strong> <small>(${totals.seenChars%15}/15 próx.)</small></span>
+      <span class="stat-pill">Ouro bônus <strong>+${Math.round(mastery.goldBonus*100)}%</strong></span>
+      <span class="stat-pill">PV/Ataque/Magia (Shinies) <strong>+${Math.round(mastery.offenseBonus*100)}%</strong> <small>(${totals.shinyChars%10}/10 próx.)</small></span>
+      <span class="stat-pill">Universos completos (+5% uni.) <strong>${mastery.completedUniverses.length}/${mastery.universes.length}</strong></span>
+    </div>
+    <div class="mastery-grid">${mastery.universes.map(u=>{
+      const pct=Math.round(100*u.seen/Math.max(1,u.total)),done=u.seen===u.total;
+      return `<div class="mastery-uni ${done?'complete':''}"><header><strong>${esc(u.universe)}</strong><span>${u.seen}/${u.total}${done?' · +5%':''}</span></header><div class="meter"><i style="width:${pct}%"></i></div></div>`;
+    }).join('')}</div></article>`;
   const groups=TIERS.map((tier,i)=>{
     const list=characters.filter(c=>c.tier===i+1);
     const cards=list.map(c=>{
@@ -579,7 +639,7 @@ function renderDex(panel){
     }).join('');
     return `<section class="card dex-group"><h3 class="rar-name rarity-${i+1}">${tier} <small>${list.filter(c=>c.count).length}/${list.length}</small></h3><div class="dex-grid">${cards}</div></section>`;
   }).join('');
-  panel.innerHTML=`<article class="card"><h2>Índice de personagens</h2><p>Todos os ${totals.totalChars} personagens podem aparecer em encontros comuns de qualquer mundo. Dentro da mesma raridade, cada personagem do universo local tem o dobro da chance de um visitante.</p><p>${owned}/${totals.totalChars} na coleção · ${totals.seenChars} descobertos · ${totals.shinyChars} variantes Shiny descobertas</p></article>${groups}<details class="card"><summary>Traits descobertas · ${totals.seenTraits}/${totals.totalTraits}</summary><p>${traits.filter(t=>t.seen).map(t=>t.name).join(' · ')||'Nenhuma trait descoberta.'}</p></details>`;
+  panel.innerHTML=`${masteryCard}<article class="card"><h2>Índice de personagens</h2><p>Todos os ${totals.totalChars} personagens podem aparecer em encontros comuns de qualquer mundo. Dentro da mesma raridade, cada personagem do universo local tem o dobro da chance de um visitante.</p><p>${owned}/${totals.totalChars} na coleção · ${totals.seenChars} descobertos · ${totals.shinyChars} variantes Shiny descobertas</p></article>${groups}<details class="card"><summary>Traits descobertas · ${totals.seenTraits}/${totals.totalTraits}</summary><p>${traits.filter(t=>t.seen).map(t=>t.name).join(' · ')||'Nenhuma trait descoberta.'}</p></details>`;
 }
 async function reviewBatch(){
   const units=duplicateSellCandidates(state,{includeCommonTraits:bulkCommon}).slice(0,200);
@@ -632,17 +692,33 @@ function renderProfile(){
   const unit=publicUnit??copy(profileUid);
   if(!unit){$('#character-profile').close();return;}
   const inTeam=state.team.includes(unit.uid);
-  const stats=fighter(unit,undefined,inTeam?card(state.leader):null);
-  const base=fighter(unit);
+  const mastery=publicUnit?null:dexMastery(state);
+  const stats=fighter(unit,undefined,inTeam?card(state.leader):null,false,mastery);
+  const base=fighter(unit,undefined,null,false,mastery);
   const xp=xpProgress(unit.xp,publicUnit?100:levelCap(state));
   const names=slotTraits(unit);
   const equipped=TRAITS.filter(t=>names.includes(t.name));
   const bonuses=equipped.flatMap(t=>traitEffects(t).map(effect=>t.name+' · '+effect));
   const trait=equipped.length===1?equipped[0]:null;
+  const stars=Math.max(0,Math.min(MAX_STARS,unit.stars??0));
+  const nextAwaken=publicUnit?null:awakenCost(unit);
+  const duplicates=publicUnit?[]:state.collection.filter(u=>u.id===unit.id&&u.uid!==unit.uid&&!state.team.includes(u.uid)&&!u.locked);
+  const essence=state.items?.essence??0;
+  const xpTomes=state.items?.xpTome??0;
+  const catalysts=state.items?.catalyst??0;
+  const traitLocks=state.items?.traitLock??0;
+  const pity=state.traitPity??0;
+  const awakenHtml=!publicUnit?`<div class="awaken-box"><h3>Despertar ${stars?'★'.repeat(stars):'☆'} (${stars}/${MAX_STARS})</h3>
+    <p class="caption">Cada estrela concede +4% em todos os atributos${stars>=5?' · Bônus ★5 ativo (+5% Velocidade).':' (+5% Velocidade extra em ★5).'}</p>
+    ${nextAwaken?`<p class="caption">Próxima estrela (★${nextAwaken.next}): <b>${int.format(nextAwaken.gold)} ouro</b> + 1 cópia ou <b>${nextAwaken.essence} Essência(s)</b> (você tem ${essence}).</p>
+      <div class="awaken-actions">
+        ${duplicates.length?`<select id="awaken-dup-select">${duplicates.map(d=>`<option value="${d.uid}">${serial(d)} · Nv.${levelAt(d.xp)}${d.shiny?' Shiny':''}${d.trait?' · '+esc(d.trait):''}</option>`).join('')}</select><button type="button" class="primary" data-awaken-dup="${unit.uid}" ${state.gold<nextAwaken.gold?'disabled':''}>Despertar com cópia</button>`:'<small class="caption">Sem cópias livres para sacrificar.</small>'}
+        <button type="button" class="ghost" data-awaken-essence="${unit.uid}" ${state.gold<nextAwaken.gold||essence<nextAwaken.essence?'disabled':''}>Usar ${nextAwaken.essence} Essência(s)</button>
+      </div>`:'<p><strong>Despertar máximo alcançado (★★★★★)!</strong></p>'}</div>`:'';
   const content=`<header class="profile-title" style="--tone:${COLORS[stats.color]}">
     ${img(stats.sprite)}
     <div><p class="smallcaps">${stats.universe}</p><h2 id="profile-title">${unitLabel(unit)}</h2>${publicUnit?'':lockButton(unit)}
-    <p>${TIERS[stats.tier-1]} · ${stats.color} · ${stats.role} · ${unit.shiny?'Shiny':'Normal'}</p>
+    <p>${TIERS[stats.tier-1]} · ${stats.color} · ${stats.role} · ${unit.shiny?'Shiny':'Normal'}${stars?' · '+'★'.repeat(stars):''}</p>
     <p>${strengthLabels(unitPower(unit),stats.level,projectedPower(unit))}</p><small>Força individual sem bônus de líder.</small><p><b>Serial ${publicUnit||community?.active()?'global':'local'} ${serial(unit)}</b> · ${publicUnit?'Comunidade':inTeam?'Formação principal':'Reserva'}${state.leader===unit.uid?' · Líder':''}</p></div>
   </header>
   <div class="profile-grid">
@@ -651,16 +727,26 @@ function renderProfile(){
         const boost=stats[key]-base[key];
         return `<div><dt>${label}</dt><dd>${int.format(stats[key])}${boost?` <small>(+${int.format(boost)})</small>`:''}</dd></div>`;
       }).join('')}</dl><p><b>Avaliação por função · ${int.format(formationPower(unit))}</b></p><small>Nota para comparar personagens da função ${stats.role} no nível 100, pelos atributos.</small>
+      ${awakenHtml}
     </section>
     <section class="card"><h3>Nível ${xp.level}</h3>
       ${publicUnit?'':xp.required?`<label for="profile-xp">${xp.current} / ${xp.required} XP até o próximo nível</label><progress id="profile-xp" value="${xp.current}" max="${xp.required}"></progress>`:'<p>Nível máximo</p>'}
       <p class="caption">${int.format(unit.xp)} XP total</p>
+      ${!publicUnit&&xp.required?`<button type="button" class="ghost" data-use-xp-tome="${unit.uid}" ${xpTomes<1?'disabled':''}>Usar Tomo de XP (+25.000 XP) · ${xpTomes} disp.</button>`:''}
       <h3>Habilidade</h3><p><b>${stats.skill}</b><br>${SKILL_EFFECTS[stats.kind]}</p>
       ${stats.signatureAssist?'<p class="caption">Na Arena, também usa esta habilidade como assistência quando está na reserva.</p>':''}
       <h3>Efeito como líder</h3><p>${stats.leader}</p>
     </section>
     <section class="card"><h3>Trait</h3><p>${names.join(' + ')||'Sem Trait'}</p>${trait?`<p>${trait.rarity} · 1 em ${int.format(trait.odds)} recrutáveis</p>`:''}
-      ${!publicUnit?`<p>Tokens de reroll · ${state.traitItems??0}</p><p class="caption">Cada rolagem substitui o slot escolhido. Duas traits: 4,95%. Três: 0,05%.</p>${[0,1].map(slot=>`<section class="trait-loadout"><b>Slot ${'AB'[slot]}${slot===(unit.activeSlot??0)?' · equipado':''}</b><p>${slotTraits(unit,slot).join(' + ')||'Vazio'}</p>${slotTraits(unit,slot).length>1?`<small>Combinação por token: ≈ 1 em ${int.format(Math.round(1/loadoutChance(slotTraits(unit,slot))))}</small><br>`:''}<button data-slot-action="reroll" data-slot="${slot}" ${!(state.traitItems>0)?'disabled':''}>Rolar · 1 token</button> <button data-slot-action="equipTraitSlot" data-slot="${slot}" ${!slotTraits(unit,slot).length||slot===(unit.activeSlot??0)?'disabled':''}>Equipar</button></section>`).join('')}`:''}
+      ${!publicUnit?`<p>Tokens de reroll · <b>${state.traitItems??0}</b> · Catalisadores · <b>${catalysts}</b> · Selos de Trava · <b>${traitLocks}</b></p>
+        <div class="pity-bar"><small>Garantia (Pity) para Trait Mítica+: <b>${pity}/${TRAIT_PITY_LIMIT}</b></small><div class="meter"><i style="width:${Math.min(100,Math.round(100*pity/TRAIT_PITY_LIMIT))}%"></i></div></div>
+        <div class="reroll-opts"><label><input type="checkbox" id="reroll-catalyst" ${catalysts<1?'disabled':''}> Usar Catalisador (3× multi-trait, Rara+)</label></div>
+        ${[0,1].map(slot=>{
+          const cur=slotTraits(unit,slot);
+          return `<section class="trait-loadout"><b>Slot ${'AB'[slot]}${slot===(unit.activeSlot??0)?' · equipado':''}</b><p>${cur.join(' + ')||'Vazio'}</p>${cur.length>1?`<small>Combinação por token: ≈ 1 em ${int.format(Math.round(1/loadoutChance(cur)))}</small><br>`:''}
+          ${cur.length&&traitLocks>0?`<label class="caption">Travar trait (1 Selo): <select data-lock-select="${slot}"><option value="">Não travar</option>${cur.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join('')}</select></label><br>`:''}
+          <button data-slot-action="reroll" data-slot="${slot}" ${!(state.traitItems>0)?'disabled':''}>Rolar · 1 token</button> <button data-slot-action="equipTraitSlot" data-slot="${slot}" ${!cur.length||slot===(unit.activeSlot??0)?'disabled':''}>Equipar</button></section>`;
+        }).join('')}`:''}
       ${names.includes('Made in Heaven')&&names.includes('Voto de Nen')?`<p>Combo · ${unit.nen?'8× dano · 2 vagas':'4× dano · 1 vaga'}</p>`:''}
       ${!publicUnit&&names.includes('Voto de Nen')?`<button class="ghost" data-nen="${unit.uid}" ${inTeam&&!unit.nen&&formationCost(state)>=4?'disabled':''}>${unit.nen?'Desativar Última Aposta':inTeam&&formationCost(state)>=4?'Libere uma vaga para ativar':'Ativar Última Aposta'}</button>`:''}
       ${bonuses.length?`<ul>${bonuses.map(bonus=>`<li>${bonus}</li>`).join('')}</ul>`:''}
@@ -874,36 +960,94 @@ function floatTag(target,text,cls=''){
   const hit=document.createElement('span');hit.className='float'+(cls?' '+cls:'');hit.textContent=text;
   target.append(hit);setTimeout(()=>hit.remove(),780);
 }
+function fmtMilestoneReward(m){
+  const parts=[];
+  if(m.gold)parts.push(`+${int.format(m.gold)} ouro`);
+  if(m.traitItems)parts.push(`+${m.traitItems} token(s)`);
+  if(m.items?.essence)parts.push(`+${m.items.essence} essência(s)`);
+  if(m.items?.xpTome)parts.push(`+${m.items.xpTome} tomo(s) XP`);
+  if(m.items?.catalyst)parts.push(`+${m.items.catalyst} catalisador(es)`);
+  if(m.items?.traitLock)parts.push(`+${m.items.traitLock} selo(s) trava`);
+  return parts.join(' · ');
+}
 function renderModes(panel){
   if(!panel.querySelector('#modes-nav')){
-    panel.innerHTML='<nav id="modes-nav" class="community-tabs" aria-label="Modos de jogo"><button class="ghost" data-game-mode="raid">Raid</button><button class="ghost" data-game-mode="tower">Torre infinita</button></nav><div id="mode-info"></div><div id="mode-fight"></div>';
+    panel.innerHTML='<nav id="modes-nav" class="community-tabs" aria-label="Modos de jogo"><button class="ghost" data-game-mode="raid">Raid</button><button class="ghost" data-game-mode="tower">Torre infinita</button><button class="ghost" data-game-mode="weeklyTower">Torre semanal</button></nav><div id="mode-info"></div><div id="mode-fight"></div>';
   }
   for(const button of panel.querySelectorAll('[data-game-mode]'))button.setAttribute('aria-pressed',button.dataset.gameMode===mode);
-  const daily=raidInfo(),next=(state.towerCleared??0)+1;
+  const daily=raidInfo(),wt=weeklyTowerToday(gameNow()),next=(state.towerCleared??0)+1;
   const used=state.raid?.day===daily.day?state.raid.attempts:0;
+  const bestToday=used?state.raid.bestDamage:0;
+  const claimedToday=state.raid?.day===daily.day&&Array.isArray(state.raid.claimed)?state.raid.claimed:[];
   const ready=state.team.some(uid=>readyAt(state,uid)<=gameNow());
-  const playing=duel?.result===null,locked=(state.unlocked??0)<9;
-  const dayRaid=mode==='raid',canReplay=state.ballRun&&state.ballRun.raid===dayRaid&&!playing;
+  const playing=duel?.result===null,locked=(state.unlocked??0)<9,weeklyLocked=(state.unlocked??0)<5;
+  const dayRaid=mode==='raid',isWeekly=mode==='weeklyTower';
+  const canReplay=state.ballRun&&(dayRaid?state.ballRun.raid:isWeekly?state.ballRun.weekly:(!state.ballRun.raid&&!state.ballRun.weekly))&&!playing;
   const autoControl=`<button type="button" class="ghost auto-tower" data-auto-tower aria-pressed="${autoTower}" ${locked?'disabled':''}>Avanço automático · ${autoTower?'ligado':'desligado'}</button>`;
   let content;
   if(dayRaid){
     const kit=bossKits[daily.boss.arenaKind];
     const skill=kit?` · ${kit.name} (${kit.cooldown} s)`:'';
-    content=`<article class="card"><h2>Raid diária</h2><div class="floor-card raid-card" data-world="${daily.index}"><div><small>Chefe do ciclo</small><h3>${daily.boss.name}</h3><span>${WORLDS[daily.index].name}${skill}</span></div>${enemyPortrait('enemy-'+(daily.index+1)+'-5',daily.boss.name)}</div><p>${3-used}/3 tentativas · Melhor dano hoje: ${int.format(used?state.raid.bestDamage:0)}</p><p class="caption">1 token por tentativa concluída. Renova às 12h de Brasília.</p><button id="raid-start" class="primary" ${playing||!ready||used>=3||requestingRun?'disabled':''}>Desafiar chefe</button></article>`;
+    if(community?.ready())refreshWorldBoss();
+    const milestonesHtml=`<ul class="milestone-list">${RAID_MILESTONES.map(m=>{
+      const done=claimedToday.includes(m.damage)||bestToday>=m.damage;
+      return `<li class="milestone-item ${done?'done':''}"><strong>${m.label} dano ${done?'✓':''}</strong><span>${fmtMilestoneReward(m)}</span></li>`;
+    }).join('')}</ul>`;
+    let wbHtml='';
+    if(community?.ready()){
+      const wb=worldBossData;
+      if(wb){
+        const maxDmg=wb.milestones.at(-1).damage;
+        const pct=Math.min(100,Math.round(100*wb.totalDamage/maxDmg));
+        const claimable=wb.myDamage>0&&wb.milestones.some(m=>wb.totalDamage>=m.damage&&!wb.claimed.includes(m.damage));
+        wbHtml=`<article class="card world-boss-card"><h3>Chefe Mundial Cooperativo · Semana ${wb.week}</h3>
+          <p class="caption">Todo dano na Raid Diária soma na meta coletiva da comunidade. Sua contribuição: <b>${int.format(wb.myDamage)}</b> dano.</p>
+          <p><strong>${int.format(wb.totalDamage)}</strong> / ${int.format(maxDmg)} dano global</p>
+          <div class="meter"><i style="width:${pct}%"></i></div>
+          <ul class="milestone-list">${wb.milestones.map(m=>{
+            const hit=wb.totalDamage>=m.damage,got=wb.claimed.includes(m.damage);
+            return `<li class="milestone-item ${got?'done':''}"><strong>${m.label} ${got?'Resgatado ✓':hit?'Liberado!':''}</strong><span>${fmtMilestoneReward(m)}</span></li>`;
+          }).join('')}</ul>
+          <button type="button" class="primary" id="claim-world-boss" ${claimable?'':'disabled'}>${claimable?'Resgatar marcos globais':'Sem novos marcos para resgatar'}</button>
+        </article>`;
+      }else wbHtml='<article class="card world-boss-card"><h3>Chefe Mundial Cooperativo</h3><p class="caption">Carregando progresso global da comunidade…</p></article>';
+    }
+    content=`<article class="card"><h2>Raid diária · Nv. 90</h2><div class="floor-card raid-card" data-world="${daily.index}"><div><small>Chefe do ciclo · 10.000.000 PV</small><h3>${daily.boss.name}</h3><span>${WORLDS[daily.index].name}${skill}</span></div>${enemyPortrait('enemy-'+(daily.index+1)+'-5',daily.boss.name)}</div><p>${3-used}/3 tentativas · Melhor dano hoje: <b>${int.format(bestToday)}</b></p><p class="caption">1 token por tentativa concluída + recompensas automáticas por marcos de dano. Renova às 12h de Brasília.</p>${milestonesHtml}<button id="raid-start" class="primary" ${playing||!ready||used>=3||requestingRun?'disabled':''}>Desafiar chefe</button></article>${wbHtml}`;
+  }else if(isWeekly){
+    const cleared=state.weeklyTower?.week===wt.week?state.weeklyTower.cleared:0;
+    const wNext=cleared+1;
+    const doneAll=cleared>=WEEKLY_TOWER_FLOORS;
+    const invalidUnits=state.team.map(uid=>CHARACTERS[copy(uid).id]).filter(c=>!wt.rule.allow(c));
+    const teamValid=state.team.length>0&&invalidUnits.length===0;
+    const rows=Array.from({length:Math.min(6,WEEKLY_TOWER_FLOORS-Math.max(1,Math.min(wNext,WEEKLY_TOWER_FLOORS-5))+1)},(_,i)=>{
+      const f=Math.max(1,Math.min(wNext,WEEKLY_TOWER_FLOORS-5))+i;
+      if(f>WEEKLY_TOWER_FLOORS)return '';
+      const es=weeklyTowerEnemies(f,wt.index);
+      const rewardText=f===15?'+1 Essência · +2 Tokens · +1 Selo de Trava':f===10?'+1 Essência · +1 Catalisador':f%3===0?'+1 Essência · +1 Token':'+1 Essência';
+      return `<li class="floor-card ${f===wNext?'current':''}" data-world="${(f-1)%WORLDS.length}"><div><small>Andar ${f}/${WEEKLY_TOWER_FLOORS} · ${f<wNext?'Conquistado':f===wNext?'Atual':'A seguir'} · ${rewardText}</small><h3>${es[0].name}</h3><span>${es.length>1?'Reservas: '+es.slice(1).map(e=>e.name).join(', '):'Chefe solo'}</span></div>${enemyPortrait(es[0].sprite,es[0].name)}</li>`;
+    }).join('');
+    content=`<article class="card"><h2>Torre semanal · ${cleared}/${WEEKLY_TOWER_FLOORS}</h2>
+      <div class="rule-banner ${teamValid?'ok':'warn'}"><strong>Regra da semana (${wt.week}): ${wt.rule.name}</strong><p class="caption">${wt.rule.desc}</p><small>${teamValid?'Sua formação atual atende à regra!':'Ajuste sua equipe na Formação — bloqueados: '+invalidUnits.map(c=>c.name).join(', ')}</small></div>
+      <p class="caption">Renova toda segunda às 12h. Rende Essências de Despertar, Tokens, Catalisador (andar 10) e Selo de Trava (andar 15).</p>
+      <button type="button" class="primary" data-action="weeklyTower" ${weeklyLocked||doneAll||!teamValid||playing||!ready||requestingRun?'disabled':''}>${weeklyLocked?'Libera no mundo 6':doneAll?'Torre semanal concluída!':'Desafiar andar '+wNext}</button>
+      <ol class="floor-list">${rows}</ol></article>`;
   }else{
     const start=floorPage??next;
+    const curAffix=towerAffix(next);
     const rows=Array.from({length:6},(_,i)=>{
-      const floor=start+i,[boss]=towerEnemies(floor),idx=(floor-1)%WORLDS.length;
-      const kit=bossKits[boss.kind],skill=kit?` · ${kit.name} (${kit.cooldown} s)`:'';
-      return `<li class="floor-card ${floor===next?'current':''}" data-world="${idx}"><div><small>Andar ${floor} · ${floor<next?'Conquistado':floor===next?'Atual':'A seguir'}</small><h3>${boss.name}</h3><span>${WORLDS[idx].name}${skill}</span></div>${enemyPortrait(boss.sprite,boss.name)}</li>`;
+      const floor=start+i,enemies=towerEnemies(floor),idx=(floor-1)%WORLDS.length,af=towerAffix(floor),isTransc=floor%10===0;
+      const kit=bossKits[enemies[0].kind],skill=kit?' · '+kit.name+' ('+kit.cooldown+' s)':'';
+      return `<li class="floor-card ${floor===next?'current':''}" data-world="${idx}"><div><small>Andar ${floor} · ${floor<next?'Conquistado':floor===next?'Atual':'A seguir'}${isTransc?' · ★ Chefe Transcendente (+Essência)':''} · ${af.name}</small><h3>${enemies[0].name}</h3><span>${isTransc?'Esquadrão Transcendente':WORLDS[idx].name}${enemies.length>1?' · Reservas: '+enemies.slice(1).map(e=>e.name).join(', '):''}</span></div>${enemyPortrait(enemies[0].sprite,enemies[0].name)}</li>`;
     }).join('');
-    content=`<article class="card"><h2>Torre infinita</h2><p class="caption">1 token por andar conquistado. A cada 5 andares, a recompensa é de 2 tokens.</p><button class="primary" data-action="tower" ${locked||playing||!ready||requestingRun||state.towerQueued||state.pending?.towerFloor?'disabled':''}>${locked?'Libera no mundo 10':'Desafiar andar '+next}</button> ${autoControl}<ol class="floor-list">${rows}</ol><nav class="floor-nav" aria-label="Percorrer andares"><button class="ghost" data-floor-page="${Math.max(1,start-6)}" ${start===1?'disabled':''}>Anteriores</button><button class="ghost" data-floor-page="current">Andar atual</button><button class="ghost" data-floor-page="${start+6}">Próximos</button></nav></article>`;
+    content=`<article class="card"><h2>Torre infinita</h2><p class="caption">1 token por andar (2 a cada 5 andares; 3 tokens + Essência de Despertar a cada 10 andares com Chefes Transcendentes).</p>
+      <p><span class="affix-pill">Afixo do andar ${next}: <b>${curAffix.name}</b> — ${curAffix.desc}</span></p>
+      <button class="primary" data-action="tower" ${locked||playing||!ready||requestingRun||state.towerQueued||state.pending?.towerFloor?'disabled':''}>${locked?'Libera no mundo 10':'Desafiar andar '+next}</button> ${autoControl}<ol class="floor-list">${rows}</ol><nav class="floor-nav" aria-label="Percorrer andares"><button class="ghost" data-floor-page="${Math.max(1,start-6)}" ${start===1?'disabled':''}>Anteriores</button><button class="ghost" data-floor-page="current">Andar atual</button><button class="ghost" data-floor-page="${start+6}">Próximos</button></nav></article>`;
   }
   if(canReplay)content+='<button id="ball-replay" class="ghost">Rever último desafio</button>';
   const info=$('#mode-info');
   if(info.lastContent!==content){info.innerHTML=content;info.lastContent=content;}
   const fight=$('#mode-fight');if(viewingRun)duelPanel(fight,true);else fight.replaceChildren();
-  if(!dayRaid&&viewingRun){
+  if(!dayRaid&&!isWeekly&&viewingRun){
     let controls=fight.querySelector('.tower-followup');
     if(!controls){controls=document.createElement('div');controls.className='tower-followup';fight.append(controls);}
     const victory=towerVictory();
@@ -913,7 +1057,6 @@ function renderModes(panel){
     const html=advance+autoControl+(status?'<p class="caption" role="status">'+status+'</p>':'');
     if(controls.lastContent!==html){controls.innerHTML=html;controls.lastContent=html;}
   }else fight.querySelector('.tower-followup')?.remove();
-
 }
 function enemyPortrait(sprite,name){return `<span class="enemy-portrait"><img src="${spriteURL(sprite)}" alt="${name}"></span>`;}
 function renderPanel(){
@@ -948,7 +1091,26 @@ function renderPanel(){
   if(tab==='modos'){switchFight(mode);renderModes(panel);return;}
   if(tab==='indice'){renderDex(panel);return;}
   if(tab==='itens'){
-    panel.innerHTML=`<article class="card"><h2>Itens</h2><div class="token-item"><img src="icons/token-reroll.png" alt=""><div><h3>Token de reroll</h3><p class="caption">Rola as traits de um slot à escolha na ficha do personagem.</p><strong>Quantidade · ${state.traitItems??0}</strong></div><button class="primary" data-tab="colecao">Escolher personagem</button></div></article>`;
+    const it=state.items??{};
+    const wk=weeklyCycle(gameNow()).week;
+    const boughtMap=state.goldShop?.week===wk?(state.goldShop.bought??{}):{};
+    const now=gameNow();
+    const hasRec=(state.partyRecovery??0)>now||Object.values(state.recovery??{}).some(t=>t>now);
+    const inv=[
+      {name:'Token de reroll',qty:state.traitItems??0,desc:'Rola as traits de um slot na ficha do personagem.',action:'<button class="primary" data-tab="colecao">Abrir coleção</button>'},
+      {name:'Essência de Despertar',qty:it.essence??0,desc:'Substitui cópias duplicadas para despertar personagens até ★5.',action:'<button class="ghost" data-tab="colecao">Despertar na ficha</button>'},
+      {name:'Catalisador de Trait',qty:it.catalyst??0,desc:'Triplica a chance de 2–3 traits e garante raridade Rara+ no reroll.',action:''},
+      {name:'Selo de Trava de Trait',qty:it.traitLock??0,desc:'Mantém 1 trait escolhida fixa durante um reroll no slot.',action:''},
+      {name:'Tomo de XP',qty:it.xpTome??0,desc:'Concede +25.000 XP instantâneo na ficha de qualquer personagem.',action:'<button class="ghost" data-tab="colecao">Usar na ficha</button>'},
+      {name:'Elixir de Recuperação',qty:it.elixir??0,desc:'Zera imediatamente o tempo de recuperação da equipe.',action:`<button type="button" class="primary" id="use-elixir" ${(it.elixir??0)<1||!hasRec?'disabled':''}>${hasRec?'Usar Elixir agora':'Equipe recuperada'}</button>`},
+    ];
+    panel.innerHTML=`<article class="card"><h2>Inventário de Itens</h2><p class="caption">Itens consumíveis usados na ficha do personagem ou para acelerar o endgame.</p>
+      <div class="items-grid">${inv.map(x=>`<div class="item-box"><header><h3>${x.name}</h3><span class="item-qty">×${int.format(x.qty)}</span></header><p class="caption">${x.desc}</p>${x.action}</div>`).join('')}</div></article>
+      <article class="card" style="margin-top:14px"><h2>Mercado Semanal de Ouro</h2><p class="caption">Troque ouro excedente por recursos de endgame. Estoque renova toda segunda às 12h · Saldo: <b>${int.format(state.gold)} ouro</b>.</p>
+      <div class="shop-grid">${GOLD_SHOP.map(item=>{
+        const bought=boughtMap[item.id]??0,price=goldShopPrice(item,bought),soldOut=bought>=item.limit;
+        return `<div class="shop-row"><header><h4>${item.name}</h4><small>${bought}/${item.limit} sem.</small></header><p class="caption">${item.desc}</p><button type="button" class="primary" data-gold-buy="${item.id}" ${soldOut||state.gold<price?'disabled':''}>${soldOut?'Esgotado esta semana':int.format(price)+' ouro'}</button></div>`;
+      }).join('')}</div></article>`;
     return;
   }
   if(tab==='exploracao'){
@@ -964,7 +1126,13 @@ function renderPanel(){
     const teamPower=state.team.reduce((sum,uid)=>sum+unitPower(copy(uid),active),0);
     const reserves=state.collection.filter(u=>!state.team.includes(u.uid)).sort((a,b)=>unitPower(b)-unitPower(a));
     const currentArea=worldOf(state).areas[state.area];
-    panel.innerHTML=`<div class="formation-toolbar card"><div class="formation-stats"><span class="stat-pill">Força total <strong>${int.format(teamPower)}</strong></span><span class="stat-pill">Vagas <strong>${formationCost(state)}/4</strong></span><span class="stat-pill"><i class="color-dot" style="--hue:${COLORS[currentArea.color]}"></i> Contra ${currentArea.color}: ${teamAffinitySummary(currentArea.color)}</span></div><div class="auto-form-controls"><label>Critério da formação <select id="auto-form-mode"><option value="power" ${autoFormMode==='power'?'selected':''}>Melhor equipe agora</option><option value="projected" ${autoFormMode==='projected'?'selected':''}>Planejar equipe no Nv. 100</option><option value="balanced" ${autoFormMode==='balanced'?'selected':''}>Equilibrada</option><option value="area" ${autoFormMode==='area'?'selected':''}>Contra área atual</option></select></label><button type="button" class="primary" id="auto-form-btn">Auto-formação</button></div></div>
+    const presets=state.presets??{};
+    const defPreset=state.defensePreset??'';
+    const presetsBar=`<div class="presets-bar card"><div class="preset-slots">${PRESET_SLOTS.map(slot=>{
+      const saved=!!presets[slot]?.team?.length;
+      return `<div class="preset-slot"><strong>${PRESET_LABELS[slot]}</strong><button type="button" class="ghost" data-load-preset="${slot}" ${saved?'':'disabled'}>Usar</button><button type="button" class="ghost" data-save-preset="${slot}" ${state.team.length?'':'disabled'}>Salvar</button></div>`;
+    }).join('')}</div><label class="defense-picker">Defesa da Arena <select id="defense-preset-select"><option value="" ${!defPreset?'selected':''}>Formação ativa</option>${PRESET_SLOTS.filter(s=>presets[s]?.team?.length).map(s=>`<option value="${s}" ${defPreset===s?'selected':''}>Preset · ${PRESET_LABELS[s]}</option>`).join('')}</select></label></div>`;
+    panel.innerHTML=`${presetsBar}<div class="formation-toolbar card"><div class="formation-stats"><span class="stat-pill">Força total <strong>${int.format(teamPower)}</strong></span><span class="stat-pill">Vagas <strong>${formationCost(state)}/4</strong></span><span class="stat-pill"><i class="color-dot" style="--hue:${COLORS[currentArea.color]}"></i> Contra ${currentArea.color}: ${teamAffinitySummary(currentArea.color)}</span></div><div class="auto-form-controls"><label>Critério da formação <select id="auto-form-mode"><option value="power" ${autoFormMode==='power'?'selected':''}>Melhor equipe agora</option><option value="projected" ${autoFormMode==='projected'?'selected':''}>Planejar equipe no Nv. 100</option><option value="balanced" ${autoFormMode==='balanced'?'selected':''}>Equilibrada</option><option value="area" ${autoFormMode==='area'?'selected':''}>Contra área atual</option></select></label><button type="button" class="primary" id="auto-form-btn">Auto-formação</button></div></div>
       <div class="formation-layout"><article class="card formation-board"><div class="board-head"><h2>Formação de combate</h2><div class="preset-group" role="group" aria-label="Posicionamento rápido"><button type="button" class="ghost" data-preset="padrao">Padrão</button><button type="button" class="ghost" data-preset="espalhado">Espalhado</button><button type="button" class="ghost" data-preset="proteger">Proteger</button></div></div>
       <div class="field" id="field"><span class="field-label back">RETAGUARDA</span><span class="field-label">FRENTE</span>
       ${state.team.map(uid=>{const [x,y]=state.positions[uid];const c=card(uid);return `<button class="field-marker ${uid===selected?'active':''}" data-marker="${uid}" aria-label="Ficha de ${c.name} (${c.role}). Use as setas para mover." style="left:${x}%;top:${y}%;--tone:${COLORS[c.color]}"><span class="marker-role">${ROLE_TAG[c.role]??''}</span>${img(spriteFor(copy(uid)))}<small>${c.name.split(' · ')[0]}</small></button>`;}).join('')}</div>
@@ -1150,7 +1318,43 @@ document.addEventListener('click',e=>{
     if(b.dataset.color)chartColor=b.dataset.color;else chartMode=b.dataset.mode;
     const attribute=b.dataset.color?'color':'mode';renderPanel();document.querySelector(`[data-${attribute}="${b.dataset[attribute]}"]`)?.focus();
   }
-  if(b.id==='arena-buy')void buyArenaToken();
+  if(b.dataset.arenaBuy)void buyArenaShopItem(b.dataset.arenaBuy);
+  if(b.dataset.goldBuy){
+    const item=GOLD_SHOP.find(x=>x.id===b.dataset.goldBuy);
+    if(item)void transaction({type:'goldShop',itemId:item.id}).then(ok=>{if(ok)note(`${item.name} comprado com ouro.`);});
+    return;
+  }
+  if(b.id==='use-elixir'){void transaction({type:'useElixir'}).then(ok=>{if(ok)note('Equipe recuperada instantaneamente!');});return;}
+  if(b.dataset.useXpTome){void transaction({type:'useXpTome',uid:b.dataset.useXpTome}).then(ok=>{if(ok)note('+25.000 XP aplicado!');});return;}
+  if(b.dataset.awakenDup){
+    const sac=$('#awaken-dup-select')?.value;
+    if(sac&&confirm('Sacrificar a cópia selecionada + ouro para despertar este personagem?')){
+      void transaction({type:'awaken',uid:b.dataset.awakenDup,sacrificeUid:sac}).then(ok=>{if(ok)note('Personagem despertado!');});
+    }
+    return;
+  }
+  if(b.dataset.awakenEssence){
+    if(confirm('Gastar Essência de Despertar + ouro para despertar este personagem?')){
+      void transaction({type:'awaken',uid:b.dataset.awakenEssence,useEssence:true}).then(ok=>{if(ok)note('Personagem despertado com Essência!');});
+    }
+    return;
+  }
+  if(b.dataset.savePreset){void transaction({type:'savePreset',slot:b.dataset.savePreset}).then(ok=>{if(ok)note(`Formação salva em ${PRESET_LABELS[b.dataset.savePreset]}.`);});return;}
+  if(b.dataset.loadPreset){void transaction({type:'loadPreset',slot:b.dataset.loadPreset}).then(ok=>{if(ok)note(`Preset ${PRESET_LABELS[b.dataset.loadPreset]} equipado.`);});return;}
+  if(b.id==='claim-world-boss'){
+    b.disabled=true;
+    const generation=community.generation();
+    void community.claimWorldBoss().then(res=>{if(community.generation()!==generation)return;worldBossData=res.status;note('Marcos globais resgatados: '+res.claimed.join(', '));void transaction(null);})
+      .catch(err=>{if(community.generation()!==generation)return;note(err.message);worldBossUntil=0;renderPanel();});
+    return;
+  }
+  if(b.id==='claim-arena-season'){
+    b.disabled=true;
+    const generation=community.generation();
+    void community.claimArenaSeason().then(res=>{if(community.generation()!==generation)return;rankedState=null;note(`Prêmio da Liga ${res.league.name} resgatado!`);void transaction(null);})
+      .catch(err=>{if(community.generation()!==generation)return;note(err.message);rankedState=null;updateDuelButton();});
+    return;
+  }
   if(b.id==='arena-ranked')void enterRanked();
   if(b.id==='arena-find')void listOpponents();
   if(b.id==='duel-start')startDuel();
@@ -1183,6 +1387,7 @@ document.addEventListener('click',e=>{
     });
   }
   if(b.dataset.action==='tower')void enterChallenge('tower');
+  if(b.dataset.action==='weeklyTower')void enterChallenge('weeklyTower');
   if(b.id==='raid-start')void enterChallenge('raid');
   if(b.id==='ball-replay'&&state.ballRun&&duel?.result!==null){
     if(!state.ballRun.raid){autoTower=false;liveTowerSequence=null;towerAdvanceAt=0;}
@@ -1202,8 +1407,11 @@ document.addEventListener('click',e=>{
     const unit=copy(profileUid),slot=Number(b.dataset.slot);
     if(!unit||publicUnit)return;
     const type=b.dataset.slotAction,names=slotTraits(unit,slot);
-    if(type==='reroll'&&!confirm('Gastar 1 token para rolar o slot '+('AB'[slot])+'? Conteúdo atual: '+(names.join(' + ')||'vazio')+'.'))return;
-    void transaction({type,slot,uid:unit.uid,roll:state.traitRolls??0});
+    const useCatalyst=type==='reroll'&&Boolean($('#reroll-catalyst')?.checked);
+    const lockTrait=type==='reroll'?($(`[data-lock-select="${slot}"]`)?.value||null):null;
+    const extras=[useCatalyst?'1 Catalisador':null,lockTrait?`1 Selo travando ${lockTrait}`:null].filter(Boolean);
+    if(type==='reroll'&&!confirm('Gastar 1 token'+(extras.length?' + '+extras.join(' + '):'')+' para rolar o slot '+('AB'[slot])+'? Conteúdo atual: '+(names.join(' + ')||'vazio')+'.'))return;
+    void transaction({type,slot,uid:unit.uid,roll:state.traitRolls??0,useCatalyst,lockTrait});
   }
   if(b.dataset.action==='boss')void transaction({type:'boss'});
   if(b.dataset.upgrade)void transaction({type:'upgrade',id:b.dataset.upgrade});
@@ -1235,6 +1443,7 @@ document.addEventListener('change',e=>{const target=e.target;
   if(target.id==='auto-routes')changeSetting(target,{type:'autoRoutes',enabled:target.checked});
   if(target.id==='explore-auto-routes')void transaction({type:'autoRoutes',enabled:target.checked});
   if(target.id==='auto-form-mode'){autoFormMode=target.value;return;}
+  if(target.id==='defense-preset-select'){void transaction({type:'setDefensePreset',slot:target.value||null}).then(ok=>{if(ok)note('Formação de defesa da Arena atualizada.');});return;}
   if(target.id==='col-sort'){colFilter.sort=target.value;renderCollectionGrid();return;}
   if(target.id==='col-role'){colFilter.role=target.value;renderCollectionGrid();return;}
   if(target.id==='col-tier'){colFilter.tier=target.value;renderCollectionGrid();return;}

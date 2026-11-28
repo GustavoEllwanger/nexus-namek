@@ -82,6 +82,52 @@ export function dailyCycle(now=Date.now()){
   return {day:new Date(startDate).toISOString().slice(0,10),nextAt:localNoon(startDate+86400000)};
 }
 
+// Weekly cycle resets every Monday at 12:00 America/Sao_Paulo.
+export function weeklyCycle(now=Date.now()){
+  const {day}=dailyCycle(now);
+  const d=Date.parse(day+'T00:00:00Z');
+  const dow=(new Date(d).getUTCDay()+6)%7; // 0 = Monday .. 6 = Sunday
+  const monday=d-dow*86400000;
+  const prevMonday=monday-7*86400000;
+  return {
+    week:new Date(monday).toISOString().slice(0,10),
+    prevWeek:new Date(prevMonday).toISOString().slice(0,10),
+    nextAt:localNoon(monday+7*86400000),
+    index:Math.floor(monday/(7*86400000))
+  };
+}
+
+export const ARENA_LEAGUES=[
+  {id:'bronze',name:'Bronze',min:0,color:'#cd9b6a',reward:{trophies:3,tokens:1,essence:1}},
+  {id:'prata',name:'Prata',min:100,color:'#c9d4e4',reward:{trophies:6,tokens:2,essence:2}},
+  {id:'ouro',name:'Ouro',min:200,color:'#f5d66c',reward:{trophies:10,tokens:3,essence:3}},
+  {id:'platina',name:'Platina',min:320,color:'#7ce7df',reward:{trophies:15,tokens:5,essence:5}},
+  {id:'diamante',name:'Diamante',min:450,color:'#98b8ff',reward:{trophies:22,tokens:7,essence:7}},
+  {id:'transcendente',name:'Transcendente',min:600,color:'#ff9cf2',reward:{trophies:30,tokens:10,essence:10}},
+];
+export function arenaLeague(points=0){
+  let current=ARENA_LEAGUES[0];
+  for(const l of ARENA_LEAGUES){if(points>=l.min)current=l;}
+  return current;
+}
+
+export const ARENA_SHOP=[
+  {id:'token',name:'Token de reroll',desc:'Rola as traits de um slot.',cost:5,grant:{traitItems:1}},
+  {id:'xpTome',name:'Tomo de XP',desc:'+25.000 XP instantâneo para um personagem.',cost:6,grant:{xpTome:1}},
+  {id:'essence2',name:'Essência de Despertar ×2',desc:'Substitui duplicatas no Despertar (★1–★5).',cost:8,grant:{essence:2}},
+  {id:'catalyst',name:'Catalisador de Trait',desc:'Triplica chance de 2–3 traits e garante Rara+.',cost:15,grant:{catalyst:1}},
+  {id:'traitLock',name:'Selo de Trava de Trait',desc:'Trava 1 trait atual durante o reroll.',cost:20,grant:{traitLock:1}},
+];
+
+export const GOLD_SHOP=[
+  {id:'token',name:'Token de reroll',desc:'Preço sobe a cada compra na semana.',base:150000,step:75000,limit:10,grant:{traitItems:1}},
+  {id:'essence',name:'Essência de Despertar',desc:'Desperta personagens sem precisar de cópia.',base:120000,step:40000,limit:10,grant:{essence:1}},
+  {id:'xpTome',name:'Tomo de XP',desc:'+25.000 XP instantâneo em qualquer unidade.',base:100000,step:25000,limit:5,grant:{xpTome:1}},
+  {id:'elixir',name:'Elixir de Recuperação',desc:'Zera imediatamente a recuperação da equipe.',base:25000,step:5000,limit:10,grant:{elixir:1}},
+  {id:'catalyst',name:'Catalisador de Trait',desc:'3× chance de 2–3 traits e mínimo Rara+.',base:350000,step:150000,limit:3,grant:{catalyst:1}},
+  {id:'traitLock',name:'Selo de Trava de Trait',desc:'Mantém 1 trait escolhida ao rolar o slot.',base:500000,step:250000,limit:2,grant:{traitLock:1}},
+];
+
 export function rarityLabel(odds){
   const format=new Intl.NumberFormat('pt-BR',{maximumFractionDigits:2});
   for(const [divisor,suffix] of [[1e9,'B'],[1e6,'M'],[1e3,' mil']]){

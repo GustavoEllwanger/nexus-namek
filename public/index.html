@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="pt-BR">
 <head>
-  <meta name="nexus-build" content="nexus-namek-56">
+  <meta name="nexus-build" content="nexus-namek-57">
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#000000"><meta name="description" content="RPG idle de combate automático. Monte um time e explore Namek.">
 <title>Nexus · Campanha dos mundos</title><link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icons/icon-192.png"><link rel="stylesheet" href="style.css">
@@ -58,8 +58,8 @@
         <section class="card competition-board"><h2 id="board-title"></h2><p id="board-message" class="caption"></p><ol id="board-list"></ol></section>
         <section class="card arena-market" id="arena-market" hidden><h2>Loja da Arena</h2>
           <p class="market-wallet">Saldo <strong id="trophy-balance">0 troféus</strong></p>
-          <div class="market-item"><img src="icons/token-reroll.png" alt=""><div><h3>Token de reroll</h3><small>1 token · 5 troféus</small></div></div>
-          <button class="primary" id="arena-buy">Comprar token</button><p class="caption">Vitórias ranqueadas rendem de 1 a 5 troféus conforme a força do adversário.</p><details class="trophy-rules"><summary>Troféus por vitória</summary><dl><dt>Adversário 20% ou mais abaixo</dt><dd>1</dd><dt>De 10% a menos de 20% abaixo</dt><dd>2</dd><dt>Diferença menor que 10%</dt><dd>3</dd><dt>De 10% a menos de 20% acima</dt><dd>4</dd><dt>Adversário 20% ou mais acima</dt><dd>5</dd></dl></details><p role="status" id="shop-message"></p>
+          <div id="arena-shop-list" class="arena-shop-list"></div>
+          <p class="caption">Vitórias ranqueadas rendem de 1 a 5 troféus; vitórias defensivas rendem +1 troféu (até 3/dia).</p><details class="trophy-rules"><summary>Troféus por vitória</summary><dl><dt>Adversário 20% ou mais abaixo</dt><dd>1</dd><dt>De 10% a menos de 20% abaixo</dt><dd>2</dd><dt>Diferença menor que 10%</dt><dd>3</dd><dt>De 10% a menos de 20% acima</dt><dd>4</dd><dt>Adversário 20% ou mais acima</dt><dd>5</dd></dl></details><p role="status" id="shop-message"></p>
         </section>
       </aside>
     </div>

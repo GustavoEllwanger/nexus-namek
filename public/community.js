@@ -168,8 +168,8 @@ export function createCommunity({spriteURL,onSession,onChallenge}){
     await loadSection();
   }
   function avatar(unit){
-    const {id,xp,shiny,trait,traitSlots,activeSlot,nen,serial,odds}=unit;
-    const data=escape(JSON.stringify({id,xp,shiny,trait,traitSlots,activeSlot,nen,serial,odds}));
+    const {id,xp,stars,shiny,trait,traitSlots,activeSlot,nen,serial,odds}=unit;
+    const data=escape(JSON.stringify({id,xp,stars:stars??0,shiny,trait,traitSlots,activeSlot,nen,serial,odds}));
     const card=CHARACTERS[unit.id];
     return `<button class="unit-portrait" type="button" data-public-unit="${data}" aria-label="Ficha de ${escape(card.name)}"><img class="community-sprite" src="${spriteURL(spriteFor(unit))}" alt="" style="--unit-color:${COLORS[card.color]}"></button>`;
   }
@@ -181,7 +181,7 @@ export function createCommunity({spriteURL,onSession,onChallenge}){
     const list=ranking[section]??[];
     if(!list.length&&section==='arena')return empty('A classificação começa com o primeiro duelo ranqueado.');
     if(!list.length)return empty('Os primeiros recrutas e jogadores aparecerão aqui conforme as expedições avançarem.');
-    if(section==='raid'||section==='tower'||section==='arena')return '<ol class="rank-list">'+list.map((r,i)=>`<li class="rank-row"><span>${i+1}</span>${namedPlayer(r)}<strong>${number.format(r.score)} ${section==='raid'?'dano':section==='arena'?'pts':'andares'}</strong></li>`).join('')+'</ol>';
+    if(section==='raid'||section==='tower'||section==='arena')return '<ol class="rank-list">'+list.map((r,i)=>`<li class="rank-row"><span>${i+1}</span>${namedPlayer(r)}${section==='arena'&&r.league?`<small class="league-tag">${escape(r.league)}</small>`:''}<strong>${number.format(r.score)} ${section==='raid'?'dano':section==='arena'?'pts':'andares'}</strong></li>`).join('')+'</ol>';
     return `<ol class="rank-list">${list.map((row,i)=>section==='rarity'?`
       <li class="rank-row"><span class="rank-number">${i+1}</span>${avatar(row)}
         <div class="rank-description"><strong>${unitLabel(row)}</strong><small>${TIERS[CHARACTERS[row.id]?.tier-1]??''} · ${row.trait?escape(row.trait)+' · ':''}#${String(row.serial).padStart(3,'0')} · ${namedPlayer(row.player)}</small></div>${odds(row)}</li>`:`
@@ -294,7 +294,8 @@ export function createCommunity({spriteURL,onSession,onChallenge}){
       <select name="${key}" ${key==='icon'&&attributes.avatar?'disabled':''}>${Object.entries(PROFILE_OPTIONS[key]).map(([value,label])=>`<option value="${value}" ${attributes[key]===value?'selected':''}>${label}</option>`).join('')}</select></label>`).join('')}
       </div><button class="primary" type="submit" ${readingPhoto||saving?'disabled':''}>Salvar aparência</button></fieldset></form>
       <details class="community-access"><summary>Acesso à conta</summary>${token.length===32?`<p class="caption">Guarde para entrar em outro navegador. Envie aos amigos somente o código de amigo.</p>
-      <input class="access-code" type="password" readonly aria-label="Código de acesso privado" value="${escape(token)}"><button type="button" class="ghost" data-toggle-access>Mostrar</button>`:'<p>Você entrou com uma conta vinculada.</p>'}<button class="ghost" data-sign-out>Sair da conta</button></details>`:''}`;
+      <div class="inline-fields"><input class="access-code" type="password" readonly aria-label="Código de acesso privado" value="${escape(token)}"><button type="button" class="ghost" data-toggle-access>Mostrar</button></div>
+      <div class="friend-actions"><button type="button" class="ghost" data-rotate-token>Gerar novo código</button><button type="button" class="ghost" data-sign-out>Sair da conta</button></div>`:'<p>Você entrou com uma conta vinculada.</p><button class="ghost" data-sign-out>Sair da conta</button>'}</details>`:''}`;
   }
   async function openProfile(button,playerId){
     const requestId=++profileRequest;
@@ -392,6 +393,17 @@ export function createCommunity({spriteURL,onSession,onChallenge}){
       target.textContent=show?'Ocultar':'Mostrar';
       return;
     }
+    if('rotateToken' in target.dataset){
+      if(!confirm('Gerar um novo código de acesso? O código anterior deixará de funcionar imediatamente em outros navegadores.'))return;
+      const status=dialog.querySelector('.player-status');
+      target.disabled=true;status.textContent='Gerando novo código…';
+      void request('/community/rotate-token',{}).then(data=>{
+        setToken(data.token);
+        showProfile();
+        dialog.querySelector('.player-status').textContent='Novo código gerado. Guarde-o em local seguro.';
+      }).catch(error=>{target.disabled=false;status.textContent=error.message||'Não foi possível gerar o novo código.';});
+      return;
+    }
     if('signOut' in target.dataset){if(token.length===48)void request('/community/logout',{}).catch(()=>{});clear();onSession(null);}
   });
   dialog.addEventListener('submit',event=>{
@@ -437,6 +449,10 @@ export function createCommunity({spriteURL,onSession,onChallenge}){
     topBoard:kind=>request('/community/top/'+kind),
     ranked:input=>request('/community/ranked',input),
     arenaOpponents:()=>request('/community/arena'),
+    arenaLog:()=>request('/community/arena-log'),
+    claimArenaSeason:()=>request('/community/arena-season-claim',{}),
+    worldBoss:()=>request('/community/world-boss'),
+    claimWorldBoss:()=>request('/community/world-boss/claim',{}),
     generation:()=>generation,clear,game,tick,signIn,
     mount(){root.hidden=false;render();void loadSection().catch(error=>showMessage(error.message));},
     hide(){root.hidden=true;},

@@ -1,5 +1,6 @@
 const serials=(()=>{
 
+
 // Reserve the old per-account numbering ranges once, including gaps left by sales.
 function serialSchema(players,hasRanks){
   const kind="json_extract(u.value,'$.id') || CASE WHEN json_extract(u.value,'$.shiny') THEN '-shiny' ELSE '' END";
@@ -37,6 +38,7 @@ function issueSerials(state,units,counter){
   }
   state.issuance={revision:counter.revision+1,counts};
 }
+
 
 return {serialSchema,issueSerials};
 })();
@@ -579,6 +581,52 @@ function dailyCycle(now=Date.now()){
   return {day:new Date(startDate).toISOString().slice(0,10),nextAt:localNoon(startDate+86400000)};
 }
 
+// Weekly cycle resets every Monday at 12:00 America/Sao_Paulo.
+function weeklyCycle(now=Date.now()){
+  const {day}=dailyCycle(now);
+  const d=Date.parse(day+'T00:00:00Z');
+  const dow=(new Date(d).getUTCDay()+6)%7; // 0 = Monday .. 6 = Sunday
+  const monday=d-dow*86400000;
+  const prevMonday=monday-7*86400000;
+  return {
+    week:new Date(monday).toISOString().slice(0,10),
+    prevWeek:new Date(prevMonday).toISOString().slice(0,10),
+    nextAt:localNoon(monday+7*86400000),
+    index:Math.floor(monday/(7*86400000))
+  };
+}
+
+const ARENA_LEAGUES=[
+  {id:'bronze',name:'Bronze',min:0,color:'#cd9b6a',reward:{trophies:3,tokens:1,essence:1}},
+  {id:'prata',name:'Prata',min:100,color:'#c9d4e4',reward:{trophies:6,tokens:2,essence:2}},
+  {id:'ouro',name:'Ouro',min:200,color:'#f5d66c',reward:{trophies:10,tokens:3,essence:3}},
+  {id:'platina',name:'Platina',min:320,color:'#7ce7df',reward:{trophies:15,tokens:5,essence:5}},
+  {id:'diamante',name:'Diamante',min:450,color:'#98b8ff',reward:{trophies:22,tokens:7,essence:7}},
+  {id:'transcendente',name:'Transcendente',min:600,color:'#ff9cf2',reward:{trophies:30,tokens:10,essence:10}},
+];
+function arenaLeague(points=0){
+  let current=ARENA_LEAGUES[0];
+  for(const l of ARENA_LEAGUES){if(points>=l.min)current=l;}
+  return current;
+}
+
+const ARENA_SHOP=[
+  {id:'token',name:'Token de reroll',desc:'Rola as traits de um slot.',cost:5,grant:{traitItems:1}},
+  {id:'xpTome',name:'Tomo de XP',desc:'+25.000 XP instantâneo para um personagem.',cost:6,grant:{xpTome:1}},
+  {id:'essence2',name:'Essência de Despertar ×2',desc:'Substitui duplicatas no Despertar (★1–★5).',cost:8,grant:{essence:2}},
+  {id:'catalyst',name:'Catalisador de Trait',desc:'Triplica chance de 2–3 traits e garante Rara+.',cost:15,grant:{catalyst:1}},
+  {id:'traitLock',name:'Selo de Trava de Trait',desc:'Trava 1 trait atual durante o reroll.',cost:20,grant:{traitLock:1}},
+];
+
+const GOLD_SHOP=[
+  {id:'token',name:'Token de reroll',desc:'Preço sobe a cada compra na semana.',base:150000,step:75000,limit:10,grant:{traitItems:1}},
+  {id:'essence',name:'Essência de Despertar',desc:'Desperta personagens sem precisar de cópia.',base:120000,step:40000,limit:10,grant:{essence:1}},
+  {id:'xpTome',name:'Tomo de XP',desc:'+25.000 XP instantâneo em qualquer unidade.',base:100000,step:25000,limit:5,grant:{xpTome:1}},
+  {id:'elixir',name:'Elixir de Recuperação',desc:'Zera imediatamente a recuperação da equipe.',base:25000,step:5000,limit:10,grant:{elixir:1}},
+  {id:'catalyst',name:'Catalisador de Trait',desc:'3× chance de 2–3 traits e mínimo Rara+.',base:350000,step:150000,limit:3,grant:{catalyst:1}},
+  {id:'traitLock',name:'Selo de Trava de Trait',desc:'Mantém 1 trait escolhida ao rolar o slot.',base:500000,step:250000,limit:2,grant:{traitLock:1}},
+];
+
 function rarityLabel(odds){
   const format=new Intl.NumberFormat('pt-BR',{maximumFractionDigits:2});
   for(const [divisor,suffix] of [[1e9,'B'],[1e6,'M'],[1e3,' mil']]){
@@ -587,7 +635,7 @@ function rarityLabel(odds){
   return '1/'+format.format(odds);
 }
 
-return {DAILY_ZONE,GIFT_GOLD,PROFILE_OPTIONS,DEFAULT_PROFILE,PROFILE_WORLDS,AVATAR_SIZE,PROFILE_BODY_LIMIT,appearancePatch,dailyCycle,rarityLabel};
+return {DAILY_ZONE,GIFT_GOLD,PROFILE_OPTIONS,DEFAULT_PROFILE,PROFILE_WORLDS,AVATAR_SIZE,PROFILE_BODY_LIMIT,canEquipBackground,appearancePatch,dailyCycle,weeklyCycle,ARENA_LEAGUES,arenaLeague,ARENA_SHOP,GOLD_SHOP,rarityLabel};
 })();
 const duelEngine=(()=>{
 function hasTrait(unit,name){return unit.traits?.includes(name)||unit.trait===name;}
@@ -2886,8 +2934,7 @@ return {collisionBonus,collisionPower,createDuel,finishDuel,stepDuel,pucciMultip
 const game=(()=>{
 const {Combate,affinity}=engine;
 const {createDuel,finishDuel,bossKits}=duelEngine;
-const {dailyCycle}=communityRules;
-
+const {dailyCycle,weeklyCycle,ARENA_SHOP,GOLD_SHOP}=communityRules;
 
 const AREAS = [
   { id:'entrada', name:'Costa de Namek', description:'Patrulhas do império rondam o litoral.', levels:[1,3], unlock:1, enemy:'Soldado da Tropa Freeza', base:[150,18,9,9], color:'Roxo' },
@@ -3431,17 +3478,126 @@ function leaderBuff(leader,member){
   return [member.role,member.color,member.universe,'Equipe'].includes(leader.scope)?leader.leadership:[];
 }
 
+const MAX_STARS=5;
+const TRAIT_PITY_LIMIT=25;
+const PRESET_SLOTS=['exploracao','arena','torre','raid'];
+const PRESET_LABELS={exploracao:'Exploração',arena:'Arena',torre:'Torre',raid:'Raid'};
+const RAID_MILESTONES=[
+  {damage:50000,label:'50 mil',gold:5000,items:{essence:1}},
+  {damage:250000,label:'250 mil',gold:15000,traitItems:1},
+  {damage:750000,label:'750 mil',gold:35000,items:{essence:2,xpTome:1}},
+  {damage:2000000,label:'2M',gold:75000,traitItems:1,items:{catalyst:1}},
+  {damage:5000000,label:'5M',gold:150000,traitItems:2,items:{traitLock:1}},
+];
+const WORLD_BOSS_MILESTONES=[
+  {damage:500000,label:'500 mil',gold:20000,traitItems:1,items:{essence:1}},
+  {damage:2000000,label:'2M',gold:50000,traitItems:2,items:{essence:2}},
+  {damage:10000000,label:'10M',gold:100000,traitItems:2,items:{xpTome:2,catalyst:1}},
+  {damage:50000000,label:'50M',gold:200000,traitItems:3,items:{essence:4,traitLock:1}},
+  {damage:200000000,label:'200M',gold:400000,traitItems:5,items:{catalyst:2,traitLock:1}},
+];
+const TOWER_AFFIXES=[
+  {id:'padrao',name:'Combate padrão',desc:'Sem modificadores ambientais.',apply:()=>{}},
+  {id:'fisica',name:'Fúria Física',desc:'+20% Ataque e −15% Magia para todos.',apply:f=>{f.attack=Math.round(f.attack*1.2);f.magic=Math.round(f.magic*.85);}},
+  {id:'arcana',name:'Maré Arcana',desc:'+20% Magia e −15% Ataque para todos.',apply:f=>{f.magic=Math.round(f.magic*1.2);f.attack=Math.round(f.attack*.85);}},
+  {id:'bastiao',name:'Bastião',desc:'+25% PV e +15% Defesa/Resistência.',apply:f=>{f.hp=Math.round(f.hp*1.25);f.defense=Math.round(f.defense*1.15);f.resistance=Math.round(f.resistance*1.15);}},
+  {id:'aceleracao',name:'Fluxo Acelerado',desc:'+20% Velocidade para todos.',apply:f=>{f.speed=Math.round(f.speed*1.2);}},
+];
+const WEEKLY_TOWER_FLOORS=15;
+const WEEKLY_TOWER_RULES=[
+  {id:'no_transcendent',name:'Sem Transcendentes',desc:'Apenas personagens de Comum até Secreta.',allow:c=>c.tier<8},
+  {id:'classic',name:'Clássicos (até Mítica)',desc:'Apenas personagens de Comum até Mítica.',allow:c=>c.tier<=5},
+  {id:'warm',name:'Cores Quentes',desc:'Apenas Vermelho, Laranja, Amarelo, Rosa ou Dourado.',allow:c=>['Vermelho','Laranja','Amarelo','Rosa','Dourado'].includes(c.color)},
+  {id:'cool',name:'Cores Frias',desc:'Apenas Verde, Turquesa, Azul, Roxo, Branco ou Preto.',allow:c=>['Verde','Turquesa','Azul','Roxo','Branco','Preto'].includes(c.color)},
+  {id:'tactical',name:'Guardiões & Suportes',desc:'Apenas Guardiões e Suportes entram em campo.',allow:c=>['Guardião','Suporte'].includes(c.role)},
+];
+
+function grantItems(state,bundle){
+  if(!bundle)return;
+  if(bundle.gold)state.gold=(state.gold??0)+bundle.gold;
+  if(bundle.traitItems)state.traitItems=(state.traitItems??0)+bundle.traitItems;
+  if(bundle.arenaTrophies)state.arenaTrophies=(state.arenaTrophies??0)+bundle.arenaTrophies;
+  if(bundle.items){
+    state.items??={};
+    for(const [k,v] of Object.entries(bundle.items)){
+      if(v>0)state.items[k]=(state.items[k]??0)+v;
+    }
+  }
+}
+
+function awakenCost(unit){
+  const card=CHARACTERS[unit?.id];
+  const stars=Math.max(0,Math.min(MAX_STARS,unit?.stars??0));
+  if(!card||stars>=MAX_STARS)return null;
+  const next=stars+1;
+  return {
+    next,
+    gold:card.tier*15000*next,
+    essence:next*Math.max(1,card.tier-3)
+  };
+}
+
+function dexMastery(state){
+  if(!state)return {charTiers:0,shinyTiers:0,allBonus:0,offenseBonus:0,goldBonus:0,completedUniverses:[],universes:[]};
+  const {characters,totals}=dexSummary(state);
+  const byUni=new Map();
+  for(const c of characters){
+    const entry=byUni.get(c.universe)??{universe:c.universe,seen:0,total:0};
+    entry.total++;
+    if(c.seen)entry.seen++;
+    byUni.set(c.universe,entry);
+  }
+  const universes=[...byUni.values()].sort((a,b)=>a.universe.localeCompare(b.universe,'pt-BR'));
+  const completedUniverses=universes.filter(u=>u.total>0&&u.seen===u.total).map(u=>u.universe);
+  const charTiers=Math.floor(totals.seenChars/15);
+  const shinyTiers=Math.floor(totals.shinyChars/10);
+  return {
+    charTiers,shinyTiers,
+    allBonus:charTiers*0.01,
+    offenseBonus:shinyTiers*0.01,
+    goldBonus:charTiers*0.03,
+    completedUniverses,
+    universes
+  };
+}
+
 function slotTraits(unit,index=unit.activeSlot??0){
   const stored=unit.traitSlots?.[index]??(index===0&&unit.trait?[unit.trait]:[]);
   return Array.isArray(stored)?[...new Set(stored)].filter(name=>TRAITS.some(t=>t.name===name)).slice(0,3):[];
 }
-function rollLoadout(random){
-  const count=random()<.05?(random()<.01?3:2):1;
-  const pool=TRAITS.slice(),picked=[];
-  for(let i=0;i<count;i++){
-    let weight=random()*pool.reduce((n,t)=>n+1/t.odds,0);
-    const index=pool.findIndex(t=>(weight-=1/t.odds)<0);
-    picked.push(pool.splice(index<0?pool.length-1:index,1)[0].name);
+function pickWeightedTrait(random,pool){
+  let weight=random()*pool.reduce((n,t)=>n+1/t.odds,0);
+  const index=pool.findIndex(t=>(weight-=1/t.odds)<0);
+  return pool.splice(index<0?pool.length-1:index,1)[0];
+}
+function rollLoadout(random,{lockTrait=null,catalyst=false,pity=false}={}){
+  const multiRoll=random();
+  let count;
+  if(lockTrait){
+    count=multiRoll<(catalyst?0.18:0.08)?3:2;
+  }else if(catalyst){
+    count=multiRoll<0.16?(multiRoll<0.01?3:2):1;
+  }else{
+    count=multiRoll<0.05?(multiRoll<0.0005?3:2):1;
+  }
+  const basePool=catalyst?TRAITS.filter(t=>t.odds>=20):TRAITS.slice();
+  const pool=basePool.slice(),picked=[];
+  if(lockTrait&&TRAITS.some(t=>t.name===lockTrait)){
+    picked.push(lockTrait);
+    const idx=pool.findIndex(t=>t.name===lockTrait);
+    if(idx>=0)pool.splice(idx,1);
+  }
+  if(pity&&!picked.some(n=>(TRAITS.find(t=>t.name===n)?.odds??0)>=100)){
+    const mythicPool=pool.filter(t=>t.odds>=100);
+    if(mythicPool.length){
+      const chosen=pickWeightedTrait(random,mythicPool);
+      picked.push(chosen.name);
+      const idx=pool.findIndex(t=>t.name===chosen.name);
+      if(idx>=0)pool.splice(idx,1);
+    }
+  }
+  while(picked.length<count&&pool.length){
+    picked.push(pickWeightedTrait(random,pool).name);
   }
   return picked;
 }
@@ -3462,10 +3618,22 @@ function changeTraitSlot(state,action){
   const slots=[slotTraits(unit,0),slotTraits(unit,1)];
   if(action.type==='reroll'){
     if(!(state.traitItems>=1)||action.roll!==(state.traitRolls??0))return false;
+    const useCatalyst=action.useCatalyst===true;
+    const lockTrait=typeof action.lockTrait==='string'&&action.lockTrait?action.lockTrait:null;
+    if(useCatalyst&&!((state.items?.catalyst??0)>=1))return false;
+    if(lockTrait){
+      if(!((state.items?.traitLock??0)>=1)||!slots[slot].includes(lockTrait))return false;
+    }
+    const pity=(state.traitPity??0)+1>=TRAIT_PITY_LIMIT;
     state.traitRolls=(state.traitRolls??0)+1;
     recordDex(state,unit);
-    slots[slot]=rollLoadout(rng(state.seed,0x54524149^state.traitRolls));
+    const rolled=rollLoadout(rng(state.seed,0x54524149^state.traitRolls),{lockTrait,catalyst:useCatalyst,pity});
+    slots[slot]=rolled;
     state.traitItems--;
+    if(useCatalyst)state.items.catalyst--;
+    if(lockTrait)state.items.traitLock--;
+    const hitMythic=rolled.some(n=>(TRAITS.find(t=>t.name===n)?.odds??0)>=100);
+    state.traitPity=hitMythic?0:(state.traitPity??0)+1;
   }else{
     if(!slots[slot].length||slot===(unit.activeSlot??0))return false;
     unit.activeSlot=slot;
@@ -3477,19 +3645,59 @@ function changeTraitSlot(state,action){
   if(!active.includes('Voto de Nen'))delete unit.nen;
   return true;
 }
-function fighter(unit, coords=[55,50], leader=null, tactical=false){
+function fighter(unit, coords=[55,50], leader=null, tactical=false, mastery=null){
   const card=CHARACTERS[unit.id];
   const level=levelAt(unit.xp);
   const growth=scale(level);
   const names=slotTraits(unit);
   const buffs=names.map(n=>TRAITS.find(t=>t.name===n).buffs);
   const aura=leaderBuff(leader,card);
-  const [hp,attack,magic,defense,resistance,speed]=baseStats[card.tier-1].map((base,i)=>Math.round(base*(1+roles[card.role][i])*(1+(starterBonus[card.id]?.[i]||0))*(1+buffs.reduce((sum,b)=>sum+b[i],0))*(1+(aura[i]||0))*(i===5?1:growth*(unit.shiny?1.25:1))));
+  const stars=Math.max(0,Math.min(MAX_STARS,unit.stars??0));
+  const starMult=1+stars*0.04;
+  const uniBonus=mastery?.completedUniverses?.includes(card.universe)?0.05:0;
+  const globalBonus=(mastery?.allBonus??0)+uniBonus;
+  const offBonus=mastery?.offenseBonus??0;
+  const [hp,attack,magic,defense,resistance,speed]=baseStats[card.tier-1].map((base,i)=>{
+    const mBoost=1+globalBonus+(i<=2?offBonus:0);
+    const sBoost=i===5?(stars>=5?starMult*1.05:starMult):starMult;
+    return Math.round(base*(1+roles[card.role][i])*(1+(starterBonus[card.id]?.[i]||0))*(1+buffs.reduce((sum,b)=>sum+b[i],0))*(1+(aura[i]||0))*sBoost*mBoost*(i===5?1:growth*(unit.shiny?1.25:1)));
+  });
   const [x,y]=coords;
-  return {...card,signatureAssist:card.tier>=5&&card.role==='Suporte', uid:unit.uid,trait:unit.trait,traits:names,nen:names.includes("Voto de Nen")&&unit.nen===true, level, x,y,hp,attack,magic,defense,resistance,speed,scale:growth,interval:tactical?Math.max(600,Math.round(300000/speed/100)*100):3000,magicBasic:card.role==='Mágico'||card.role==='Suporte',evade:names.includes('Instinto Superior')?3:0,survive:names.includes('Zenkai')?1:0,sprite:spriteFor(unit)};
+  return {...card,stars,signatureAssist:card.tier>=5&&card.role==='Suporte', uid:unit.uid,trait:unit.trait,traits:names,nen:names.includes("Voto de Nen")&&unit.nen===true, level, x,y,hp,attack,magic,defense,resistance,speed,scale:growth,interval:tactical?Math.max(600,Math.round(300000/speed/100)*100):3000,magicBasic:card.role==='Mágico'||card.role==='Suporte',evade:names.includes('Instinto Superior')?3:0,survive:names.includes('Zenkai')?1:0,sprite:spriteFor(unit)};
 }
 
+function chachaBlock(keyWords, counter, nonce0, nonce1){
+  const init=new Uint32Array([
+    0x61707865,0x3320646e,0x79622d32,0x6b206574,
+    keyWords[0],keyWords[1],keyWords[2],keyWords[3],
+    keyWords[4],keyWords[5],keyWords[6],keyWords[7],
+    counter>>>0,Math.floor(counter/4294967296)>>>0,nonce0>>>0,nonce1>>>0
+  ]);
+  const x=new Uint32Array(init);
+  const qr=(a,b,c,d)=>{
+    x[a]=(x[a]+x[b])>>>0;x[d]=((x[d]^x[a])<<16|(x[d]^x[a])>>>16)>>>0;
+    x[c]=(x[c]+x[d])>>>0;x[b]=((x[b]^x[c])<<12|(x[b]^x[c])>>>20)>>>0;
+    x[a]=(x[a]+x[b])>>>0;x[d]=((x[d]^x[a])<<8|(x[d]^x[a])>>>24)>>>0;
+    x[c]=(x[c]+x[d])>>>0;x[b]=((x[b]^x[c])<<7|(x[b]^x[c])>>>25)>>>0;
+  };
+  for(let r=0;r<10;r++){
+    qr(0,4,8,12);qr(1,5,9,13);qr(2,6,10,14);qr(3,7,11,15);
+    qr(0,5,10,15);qr(1,6,11,12);qr(2,7,8,13);qr(3,4,9,14);
+  }
+  for(let i=0;i<16;i++)x[i]=(x[i]+init[i])>>>0;
+  return x;
+}
 function rng(seed,index){
+  if(typeof seed==='string'&&/^[0-9a-f]{64}$/i.test(seed)){
+    const keyWords=new Uint32Array(8);
+    for(let i=0;i<8;i++)keyWords[i]=parseInt(seed.slice(i*8,i*8+8),16)>>>0;
+    let blockCounter=0,offset=16,words=null;
+    const nonce0=index>>>0,nonce1=Math.floor(index/4294967296)>>>0;
+    return ()=>{
+      if(offset>=16){words=chachaBlock(keyWords,blockCounter++,nonce0,nonce1);offset=0;}
+      return words[offset++]/4294967296;
+    };
+  }
   let state=(seed^Math.imul(index+1,2654435761))>>>0 || 1;
   return ()=>{state^=state<<13;state^=state>>>17;state^=state<<5;return (state>>>0)/4294967296;};
 }
@@ -3557,7 +3765,8 @@ function makeBattle(state,start,boss=false,towerFloor=0){
   const special=boss?world.boss:elite?world.elite:null;
   const leader=state.collection.find(c=>c.uid===state.leader);
   const available=state.team.filter(uid=>readyAt(state,uid)<=start);
-  const team=available.map(uid=>fighter(state.collection.find(c=>c.uid===uid),state.positions[uid],available.includes(leader?.uid)?CHARACTERS[leader.id]:null,!!special));
+  const mastery=dexMastery(state);
+  const team=available.map(uid=>fighter(state.collection.find(c=>c.uid===uid),state.positions[uid],available.includes(leader?.uid)?CHARACTERS[leader.id]:null,!!special,mastery));
   const level=towerFloor?90+towerFloor:special?special.level:Math.max(area.levels[0],Math.min(area.levels[1],maxLevel(state)+Math.floor(random()*3)-1));
   const recruit=special?null:rollRecruit(random,upgradeValue(state,'sorte')/100,world.universe,upgradeValue(state,'rastreio'));
   const grow=scale(level)*(towerFloor?1+.06*(towerFloor-1):1);
@@ -3578,7 +3787,7 @@ function makeBattle(state,start,boss=false,towerFloor=0){
   const reserveShare=upgradeValue(state,'xp')/100;
   const reserves=reserveShare?state.collection.filter(unit=>!state.team.includes(unit.uid)&&unit.xp<xpTo(levelCap(state))).map(unit=>unit.uid):[];
   return {start,end:start+duration,boss,elite,towerFloor,world:encounterWorld,area:state.area,level,team,enemy,recruit,result,
-    goldReward:Math.round((6+2*level)*1.2*(boss?8:(elite?2:1)*(1+upgradeValue(state,'ouro')/100))),
+    goldReward:Math.round((6+2*level)*1.2*(boss?8:(elite?2:1)*(1+upgradeValue(state,'ouro')/100+mastery.goldBonus))),
     xpBonus:upgradeValue(state,'treino')/100,recoveryMs:upgradeValue(state,'enfermaria')*1000,reserveShare,reserves};
 }
 
@@ -3659,6 +3868,7 @@ function settle(state,battle){
       const match=saleMatches(settings,copy);
       if(match&&state.collection.some(c=>c.id===id&&!!c.shiny===!!shiny)){
         entry.sold=copy;entry.saleGold=SALE_PRICES[tier-1];entry.gold+=entry.saleGold;state.gold+=entry.saleGold;
+        if(tier>=5){state.items??={};state.items.essence=(state.items.essence??0)+(tier-4);}
       }else{state.collection.push(copy);entry.recruit=copy;}
     }
     if(battle.boss && !battle.towerFloor){
@@ -3677,7 +3887,8 @@ function settle(state,battle){
   return entry;
 }
 
-function advance(state,now,budget,encounterLimit=Infinity){
+function advance(state,now,budget=null,encounterLimit=Infinity){
+  if(typeof budget==='number'){encounterLimit=budget;budget=null;}
   if(state.autoSell)state.autoSell=saleSettings(state.autoSell);
   if(state.world===undefined){
     state.world=0;state.unlocked=state.completed?1:0;state.journey={};state.autoRoutes=true;
@@ -3762,7 +3973,7 @@ function hydrateAwayRecruits(state){
     }
   }
 }
-function advanceWithPresence(state,now,observedAt=null,budget){
+function advanceWithPresence(state,now,observedAt=null,budget=null){
   if(!state.dex){
     state.dex={normal:[],shiny:[],traits:[]};
     for(const u of state.collection)recordDex(state,u);
@@ -3804,6 +4015,7 @@ function advanceWithPresence(state,now,observedAt=null,budget){
     if(budget?.exhausted)return all;
     if(seen-window.start>=AWAY_THRESHOLD){
       (state.awayReports??=[]).push({...window,recruitUids:[...(window.recruitUids??[])],end:seen,lastRecruit:state.collection.length});
+      if(state.awayReports.length>10)state.awayReports=state.awayReports.slice(-10);
     }
     state.awayWindow=newWindow(state,seen);
   }
@@ -3818,36 +4030,85 @@ function startExploration(state,now){
   return true;
 }
 
-const RAID_BOSS_HP=40000;
-const towerPrize=floor=>floor%5===0?2:1;
+const TOWER_LIMIT=30;
+const towerPrize=floor=>floor%10===0?3:floor%5===0?2:1;
+function towerAffix(floor){
+  return TOWER_AFFIXES[Math.floor((Math.max(1,floor)-1)/5)%TOWER_AFFIXES.length];
+}
 function raidToday(now){
   const {day,nextAt}=dailyCycle(now);
   const index=Math.floor(Date.parse(day+'T00:00:00Z')/86400000)%WORLDS.length;
   return {day,nextAt,index,boss:WORLDS[index].boss};
 }
-function ballBoss(index,level,factor){
+function weeklyTowerToday(now){
+  const cycle=weeklyCycle(now);
+  const rule=WEEKLY_TOWER_RULES[Math.abs(cycle.index)%WEEKLY_TOWER_RULES.length];
+  return {...cycle,rule};
+}
+const TRANSCENDENT_IDS=Object.values(CHARACTERS).filter(c=>c.tier===8).map(c=>c.id);
+function ballBoss(index,level,factor,raid){
   const b=WORLDS[index].boss,g=scale(level)*factor;
   const [hp,attack,defense,resistance]=b.base.map(v=>Math.round(v*g));
   return {name:b.name,kind:b.arenaKind??b.kind??'freeza-boss',skill:bossKits[b.arenaKind]?.name??'Ofensiva de '+b.name,color:b.color,role:'Combatente',
-    sprite:'enemy-'+(index+1)+'-5',level,scale:g,speed:106,hp,attack,magic:attack,defense,resistance,x:60,y:50};
+    sprite:'enemy-'+(index+1)+'-5',level,scale:g,speed:106,hp:raid?10000000:hp,attack,magic:attack,defense,resistance,x:60,y:50};
+}
+function transcendentBoss(slotIndex,level,factor){
+  const id=TRANSCENDENT_IDS[slotIndex%TRANSCENDENT_IDS.length];
+  const f=fighter({id,xp:xpTo(level),shiny:false,trait:null},[60,50],null,true);
+  f.hp=Math.round(f.hp*factor*0.95);
+  f.attack=Math.round(f.attack*factor*0.85);
+  f.magic=Math.round(f.magic*factor*0.85);
+  f.defense=Math.round(f.defense*factor*0.85);
+  f.resistance=Math.round(f.resistance*factor*0.85);
+  return f;
 }
 function towerEnemies(floor){
   const index=(floor-1)%WORLDS.length;
   const level=Math.min(100,62+Math.floor((floor-1)*.45));
   const factor=.82+.009*(floor-1);
-  return [ballBoss(index,level,factor)];
+  if(floor%10===0&&TRANSCENDENT_IDS.length){
+    const count=Math.min(4,Math.floor(floor/10));
+    const offset=Math.floor(floor/10)-1;
+    return Array.from({length:count},(_,i)=>transcendentBoss(offset*3+i,level,factor*(i===0?1:0.78)));
+  }
+  const team=[ballBoss(index,level,factor,false)];
+  if(floor>TOWER_LIMIT){
+    const count=Math.min(3,1+Math.floor((floor-31)/10));
+    for(let i=1;i<=count;i++)team.push(ballBoss((index+i)%WORLDS.length,level,factor*.65,false));
+  }
+  return team;
+}
+function weeklyTowerEnemies(floor,weekIndex=0){
+  const level=Math.min(100,55+floor*3);
+  const factor=0.72+0.025*(floor-1);
+  const base=(Math.abs(weekIndex)*3+floor-1)%WORLDS.length;
+  const count=floor>=12?3:floor>=6?2:1;
+  return Array.from({length:count},(_,i)=>ballBoss((base+i)%WORLDS.length,level,factor*(i===0?1:0.7),false));
 }
 function ballChallenge(state,action,now){
-  const raid=action.type==='raid',daily=raidToday(now);
+  const kind=action.type; // 'raid' | 'tower' | 'weeklyTower'
+  const raid=kind==='raid',weekly=kind==='weeklyTower';
+  const daily=raidToday(now),wt=weeklyTowerToday(now);
   const used=state.raid?.day===daily.day?state.raid.attempts:0;
-  const floor=(state.towerCleared??0)+1;
+  const weeklyCleared=state.weeklyTower?.week===wt.week?state.weeklyTower.cleared:0;
+  const floor=weekly?weeklyCleared+1:(state.towerCleared??0)+1;
   if(action.sequence!==(state.ballSequence??0))return false;
-  if(raid?(used>=3||action.day!==daily.day):((state.unlocked??0)<9||state.towerQueued||state.pending?.towerFloor||action.floor!==floor))return false;
+  if(raid){
+    if(used>=3||action.day!==daily.day)return false;
+  }else if(weekly){
+    if((state.unlocked??0)<5||floor>WEEKLY_TOWER_FLOORS||action.week!==wt.week||action.floor!==floor)return false;
+  }else{
+    if((state.unlocked??0)<9||state.towerQueued||state.pending?.towerFloor||action.floor!==floor)return false;
+  }
   const available=state.team.filter(uid=>readyAt(state,uid)<=now);
   if(!available.length)return false;
+  if(weekly&&state.team.some(uid=>!wt.rule.allow(CHARACTERS[state.collection.find(u=>u.uid===uid).id])))return false;
+  const mastery=dexMastery(state);
   const leader=available.includes(state.leader)?CHARACTERS[state.collection.find(u=>u.uid===state.leader).id]:null;
-  const left=available.map(uid=>fighter(state.collection.find(u=>u.uid===uid),state.positions[uid],leader,true));
-  const right=raid?[{...ballBoss(daily.index,45,1),hp:RAID_BOSS_HP}]:towerEnemies(floor);
+  const left=available.map(uid=>fighter(state.collection.find(u=>u.uid===uid),state.positions[uid],leader,true,mastery));
+  const right=raid?[ballBoss(daily.index,90,1,true)]:weekly?weeklyTowerEnemies(floor,wt.index):towerEnemies(floor);
+  const affix=!raid&&!weekly?towerAffix(floor):null;
+  if(affix){left.forEach(affix.apply);right.forEach(affix.apply);}
   const limit=raid?60:120;
   const match=finishDuel(createDuel(left,right,limit));
   const damage=Math.round(match.combat.log.reduce((sum,e)=>sum+(e.type==='dano'&&e.actor?.startsWith('0:')&&e.target?.startsWith('1:')?e.hp:0),0));
@@ -3858,16 +4119,44 @@ function ballChallenge(state,action,now){
     for(const f of fallen)state.recovery[f.uid]=Math.max(until,state.recovery[f.uid]??0);
     if(fallen.length===available.length)state.partyRecovery=Math.max(until,state.partyRecovery??0);
   }
-  let items=0;
+  let items=0,rewardGold=0,bonusItems={};
+  const newMilestones=[];
   if(raid){
     items=1;
-    state.raid={day:daily.day,attempts:used+1,bestDamage:Math.max(used?state.raid.bestDamage:0,damage),bestEver:Math.max(state.raid?.bestEver??0,damage)};
-  }else if(match.result==='Vitória'){
-    state.towerCleared=floor;items=towerPrize(floor);
+    const prevClaimed=state.raid?.day===daily.day&&Array.isArray(state.raid.claimed)?state.raid.claimed.slice():[];
+    const bestToday=Math.max(used?(state.raid.bestDamage??0):0,damage);
+    for(const m of RAID_MILESTONES){
+      if(bestToday>=m.damage&&!prevClaimed.includes(m.damage)){
+        prevClaimed.push(m.damage);
+        newMilestones.push(m.label);
+        grantItems(state,m);
+        rewardGold+=m.gold??0;
+        items+=m.traitItems??0;
+        if(m.items)for(const [k,v] of Object.entries(m.items))bonusItems[k]=(bonusItems[k]??0)+v;
+      }
+    }
+    state.raid={day:daily.day,attempts:used+1,bestDamage:bestToday,bestEver:Math.max(state.raid?.bestEver??0,damage),claimed:prevClaimed,lastDamage:damage};
+    state.traitItems=(state.traitItems??0)+1;
+  }else if(weekly&&match.result==='Vitória'){
+    state.weeklyTower={week:wt.week,cleared:floor};
+    const bundle={items:{essence:1}};
+    if(floor%3===0&&floor!==15){bundle.traitItems=1;items+=1;}
+    if(floor===10){bundle.items.catalyst=1;}
+    if(floor===15){bundle.items.traitLock=1;bundle.traitItems=(bundle.traitItems??0)+2;items+=2;}
+    grantItems(state,bundle);
+    bonusItems=bundle.items;
+  }else if(!weekly&&match.result==='Vitória'){
+    state.towerCleared=floor;
+    items=towerPrize(floor);
+    state.traitItems=(state.traitItems??0)+items;
+    if(floor%10===0){
+      const ess=Math.min(5,1+Math.floor(floor/20));
+      grantItems(state,{items:{essence:ess}});
+      bonusItems.essence=ess;
+    }
   }
-  state.traitItems=(state.traitItems??0)+items;
   state.ballSequence=(state.ballSequence??0)+1;
-  state.ballRun={physics:4,launchSeed:match.launchSeed,sequence:state.ballSequence,left,right,limit,raid,floor,damage,items,result:match.result};
+  state.ballRun={physics:4,launchSeed:match.launchSeed,sequence:state.ballSequence,left,right,limit,raid,weekly,floor,damage,items,reward:rewardGold,bonusItems,milestones:newMilestones,affix:affix?.name??null,result:match.result};
   return true;
 }
 function challenge(state,now){
@@ -3957,16 +4246,83 @@ function applyFormationPreset(state, preset='padrao'){
   return true;
 }
 
-function applySuggestedFormation(state,action,now){
-  const {team,leader}=action;
-  if(!Array.isArray(team)||!team.length||team.length>4||
-    team.some(uid=>typeof uid!=='string')||new Set(team).size!==team.length||!team.includes(leader))return false;
-  const units=team.map(uid=>state.collection.find(unit=>unit.uid===uid));
-  if(units.some(unit=>!unit)||units.reduce((cost,unit)=>cost+(unit.nen?2:1),0)>4)return false;
+function autoFormation(state, mode='power', now=Date.now()){
+  if(!['power','projected','balanced','area'].includes(mode)||!state.collection.length)return false;
+  const enemyColor=worldOf(state).areas[state.area]?.color;
+  const unitCost=u=>u.nen?2:1;
+  const areaFactor=c=>mode==='area'&&enemyColor?affinity(c.color,enemyColor)/Math.sqrt(affinity(enemyColor,c.color)):1;
+  function scoreWith(unit,leader){
+    if(mode==='power')return unitPower(unit,leader);
+    if(mode==='projected')return projectedPower(unit,leader);
+    return formationPower(unit,leader,false)*areaFactor(CHARACTERS[unit.id]);
+  }
+  const cmp=(a,b)=>b.score-a.score||b.u.xp-a.u.xp||b.tier-a.tier||a.u.serial-b.u.serial;
+  // Best representative per (character.id, cost) as candidate leader.
+  const leaderMap=new Map();
+  for(const u of state.collection){
+    const c=CHARACTERS[u.id],cost=unitCost(u),key=`${u.id}:${cost}`;
+    const item={u,cost,score:scoreWith(u,c),role:c.role,tier:c.tier};
+    const prev=leaderMap.get(key);
+    if(!prev||cmp(item,prev)<0)leaderMap.set(key,item);
+  }
+  let best=null;
+  for(const lead of leaderMap.values()){
+    const leaderCard=CHARACTERS[lead.u.id];
+    const rem=4-lead.cost;
+    const others=[];
+    for(const u of state.collection){
+      if(u.uid===lead.u.uid)continue;
+      const cost=unitCost(u);
+      if(cost>rem)continue;
+      const c=CHARACTERS[u.id];
+      others.push({u,cost,score:scoreWith(u,leaderCard),role:c.role,tier:c.tier});
+    }
+    others.sort(cmp);
+    let combo=[lead];
+    if(mode==='balanced'){
+      const buildBalanced=pool=>{
+        let budget=rem;
+        const cand=[lead];
+        const rolesUsed=new Set([lead.role]);
+        const picked=new Set([lead.u.uid]);
+        for(const role of ['Guardião','Combatente','Mágico','Suporte']){
+          if(rolesUsed.has(role))continue;
+          const match=pool.find(x=>x.role===role&&!picked.has(x.u.uid)&&x.cost<=budget);
+          if(match){cand.push(match);picked.add(match.u.uid);rolesUsed.add(role);budget-=match.cost;}
+        }
+        for(const x of pool){
+          if(budget<=0)break;
+          if(!picked.has(x.u.uid)&&x.cost<=budget){cand.push(x);picked.add(x.u.uid);budget-=x.cost;}
+        }
+        return {cand,roles:rolesUsed.size,score:cand.reduce((s,x)=>s+x.score,0)};
+      };
+      const withAny=buildBalanced(others);
+      const singlesOnly=buildBalanced(others.filter(x=>x.cost===1));
+      combo=singlesOnly.roles>withAny.roles||(singlesOnly.roles===withAny.roles&&singlesOnly.score>withAny.score+1e-9)?singlesOnly.cand:withAny.cand;
+    }else{
+      const singles=others.filter(x=>x.cost===1).slice(0,rem);
+      const doubles=others.filter(x=>x.cost===2).slice(0,Math.floor(rem/2));
+      let bestSub=-1;
+      for(let d=0;d<=doubles.length;d++){
+        const candidate=[lead,...doubles.slice(0,d),...singles.slice(0,rem-d*2)];
+        const total=candidate.reduce((s,x)=>s+x.score,0);
+        if(total>bestSub){bestSub=total;combo=candidate;}
+      }
+    }
+    const score=combo.reduce((s,x)=>s+x.score,0);
+    const roles=mode==='balanced'?new Set(combo.map(x=>x.role)).size:0;
+    if(!best||roles>best.roles||(roles===best.roles&&score>best.score+1e-9)){
+      best={combo,lead:lead.u,score,roles};
+    }
+  }
+  if(!best)return false;
+  best.combo.sort((a,b)=>(ROLE_ORDER[a.role]??9)-(ROLE_ORDER[b.role]??9)||b.score-a.score);
+  const units=best.combo.map(x=>x.u);
   const wasEmpty=!state.team.length;
-  state.team=team.slice();
-  state.slots=Array.from({length:4},(_,i)=>team[i]??null);
-  state.leader=leader;
+  const slots=Array.from({length:4},(_,i)=>units[i]?.uid??null);
+  state.slots=slots;
+  state.team=slots.filter(Boolean);
+  state.leader=best.lead.uid;
   applyFormationPreset(state,'padrao');
   if(wasEmpty&&!state.pending)state.nextAt=now;
   return true;
@@ -4057,8 +4413,10 @@ function sellUnit(state, uid){
   const index=state.collection.findIndex(u=>u.uid===uid);
   const [unit]=state.collection.splice(index,1);
   recordDex(state,unit);
-  const gold=SALE_PRICES[CHARACTERS[unit.id].tier-1]??0;
+  const tier=CHARACTERS[unit.id].tier;
+  const gold=SALE_PRICES[tier-1]??0;
   state.gold+=gold;
+  if(tier>=5){state.items??={};state.items.essence=(state.items.essence??0)+(tier-4);}
   delete state.positions?.[uid];
   if(state.recovery)delete state.recovery[uid];
   if(state.awayWindow&&index<state.awayWindow.firstRecruit)state.awayWindow.firstRecruit--;
@@ -4071,9 +4429,137 @@ function sellUnit(state, uid){
   return gold;
 }
 
+function goldShopPrice(item,bought=0){
+  return item.base+item.step*bought;
+}
+function resolveDefenseSquad(state){
+  const key=state.defensePreset;
+  const preset=key&&PRESET_SLOTS.includes(key)?state.presets?.[key]:null;
+  const byUid=new Map(state.collection.map(u=>[u.uid,u]));
+  const rawTeam=preset?.team?.filter(uid=>byUid.has(uid))??[];
+  const usePreset=rawTeam.length>0&&formationCost(state,rawTeam)<=4;
+  const team=usePreset?rawTeam:state.team.filter(uid=>byUid.has(uid));
+  const leader=usePreset?(team.includes(preset.leader)?preset.leader:team[0]):state.leader;
+  const positions=usePreset?{...state.positions,...preset.positions}:state.positions;
+  return {team,leader,positions};
+}
+function savePreset(state,slot){
+  if(!PRESET_SLOTS.includes(slot)||!state.team.length)return false;
+  state.presets??={};
+  const pos={};
+  for(const uid of state.team)pos[uid]=(state.positions[uid]??[50,50]).slice();
+  state.presets[slot]={team:state.team.slice(),slots:formationSlots(state).slice(),leader:state.leader,positions:pos};
+  return true;
+}
+function loadPreset(state,slot,now){
+  const p=PRESET_SLOTS.includes(slot)?state.presets?.[slot]:null;
+  if(!p||!Array.isArray(p.team))return false;
+  const validIds=new Set(state.collection.map(u=>u.uid));
+  const nextSlots=(p.slots??p.team).slice(0,4).map(uid=>uid&&validIds.has(uid)?uid:null);
+  while(nextSlots.length<4)nextSlots.push(null);
+  const team=nextSlots.filter(Boolean);
+  if(!team.length||formationCost(state,team)>4)return false;
+  const wasEmpty=!state.team.length;
+  state.slots=nextSlots;
+  state.team=team;
+  state.leader=team.includes(p.leader)?p.leader:team[0];
+  for(const uid of team){
+    const c=p.positions?.[uid];
+    if(Array.isArray(c)&&c.length===2&&c.every(Number.isFinite))state.positions[uid]=c.slice();
+  }
+  if(wasEmpty&&!state.pending)state.nextAt=now;
+  return true;
+}
+function awakenUnit(state,action){
+  const unit=state.collection.find(u=>u.uid===action.uid);
+  const cost=awakenCost(unit);
+  if(!unit||!cost||state.gold<cost.gold)return false;
+  if(action.useEssence){
+    if(!((state.items?.essence??0)>=cost.essence))return false;
+    state.gold-=cost.gold;
+    state.items.essence-=cost.essence;
+  }else{
+    const sac=state.collection.find(u=>u.uid===action.sacrificeUid);
+    if(!sac||sac.uid===unit.uid||sac.id!==unit.id||state.team.includes(sac.uid)||sac.locked===true||state.collection.length<=1)return false;
+    hydrateAwayRecruits(state);
+    const idx=state.collection.findIndex(u=>u.uid===sac.uid);
+    state.collection.splice(idx,1);
+    recordDex(state,sac);
+    delete state.positions?.[sac.uid];
+    if(state.recovery)delete state.recovery[sac.uid];
+    if(state.awayWindow&&idx<state.awayWindow.firstRecruit)state.awayWindow.firstRecruit--;
+    if(Array.isArray(state.awayReports)){
+      for(const r of state.awayReports){
+        if(idx<r.firstRecruit)r.firstRecruit--;
+        if(idx<r.lastRecruit)r.lastRecruit--;
+      }
+    }
+    state.gold-=cost.gold;
+  }
+  unit.stars=cost.next;
+  return true;
+}
+function applySuggestedFormation(state,action,now){
+  const {team,leader}=action;
+  if(!Array.isArray(team)||!team.length||team.length>4||
+    team.some(uid=>typeof uid!=='string')||new Set(team).size!==team.length||!team.includes(leader))return false;
+  const units=team.map(uid=>state.collection.find(unit=>unit.uid===uid));
+  if(units.some(unit=>!unit)||units.reduce((cost,unit)=>cost+(unit.nen?2:1),0)>4)return false;
+  const wasEmpty=!state.team.length;
+  state.team=team.slice();
+  state.slots=Array.from({length:4},(_,i)=>team[i]??null);
+  state.leader=leader;
+  applyFormationPreset(state,'padrao');
+  if(wasEmpty&&!state.pending)state.nextAt=now;
+  return true;
+}
+
 function applyGameAction(state,action,now){
   switch(action?.type){
     case 'lock': return toggleLock(state,action.uid,action.locked);
+    case 'awaken': return awakenUnit(state,action);
+    case 'savePreset': return savePreset(state,action.slot);
+    case 'loadPreset': return loadPreset(state,action.slot,now);
+    case 'setDefensePreset': {
+      if(action.slot!==null&&(!PRESET_SLOTS.includes(action.slot)||!state.presets?.[action.slot]))return false;
+      state.defensePreset=action.slot;
+      return true;
+    }
+    case 'useXpTome': {
+      const unit=state.collection.find(u=>u.uid===action.uid);
+      const maxXp=xpTo(levelCap(state));
+      if(!unit||!((state.items?.xpTome??0)>=1)||unit.xp>=maxXp)return false;
+      state.items.xpTome--;
+      unit.xp=Math.min(maxXp,unit.xp+25000);
+      return true;
+    }
+    case 'useElixir': {
+      if(!((state.items?.elixir??0)>=1))return false;
+      const hasRec=(state.partyRecovery??0)>now||Object.values(state.recovery??{}).some(t=>t>now);
+      if(!hasRec)return false;
+      state.items.elixir--;
+      state.partyRecovery=0;
+      state.recovery={};
+      return true;
+    }
+    case 'goldShop': {
+      const item=GOLD_SHOP.find(x=>x.id===action.itemId);
+      if(!item)return false;
+      const {week}=weeklyCycle(now);
+      if(state.goldShop?.week!==week)state.goldShop={week,bought:{}};
+      const bought=state.goldShop.bought[item.id]??0;
+      if(bought>=item.limit)return false;
+      const price=goldShopPrice(item,bought);
+      if(state.gold<price)return false;
+      state.gold-=price;
+      state.goldShop.bought[item.id]=bought+1;
+      if(item.grant.traitItems)state.traitItems=(state.traitItems??0)+item.grant.traitItems;
+      for(const [k,v] of Object.entries(item.grant)){
+        if(k==='traitItems')continue;
+        state.items??={};state.items[k]=(state.items[k]??0)+v;
+      }
+      return true;
+    }
     case 'sellBatch': {
       if(!Array.isArray(action.uids)||!action.uids.length||action.uids.length>200||typeof action.includeCommonTraits!=='boolean')return false;
       const eligible=new Set(duplicateSellCandidates(state,{includeCommonTraits:action.includeCommonTraits}).map(u=>u.uid));
@@ -4084,14 +4570,19 @@ function applyGameAction(state,action,now){
     }
     case 'arenaShop': {
       const count=state.arenaPurchases??0;
-      if(action.purchase!==count||!(state.arenaTrophies>=5))return false;
-      state.arenaTrophies-=5;
+      const item=ARENA_SHOP.find(x=>x.id===(action.itemId??'token'));
+      if(!item||action.purchase!==count||!((state.arenaTrophies??0)>=item.cost))return false;
+      state.arenaTrophies-=item.cost;
       state.arenaPurchases=count+1;
-      state.traitItems=(state.traitItems??0)+1;
+      if(item.grant.traitItems)state.traitItems=(state.traitItems??0)+item.grant.traitItems;
+      for(const [k,v] of Object.entries(item.grant)){
+        if(k==='traitItems')continue;
+        state.items??={};state.items[k]=(state.items[k]??0)+v;
+      }
       return true;
     }
     case 'reroll': case 'equipTraitSlot': return changeTraitSlot(state,action);
-    case 'raid': return ballChallenge(state,action,now);
+    case 'raid': case 'tower': case 'weeklyTower': return ballChallenge(state,action,now);
     case 'nen': {
       const u=state.collection.find(c=>c.uid===action.uid);
       if(!u||!slotTraits(u).includes('Voto de Nen')||typeof action.enabled!=='boolean')return false;
@@ -4155,7 +4646,6 @@ function applyGameAction(state,action,now){
       if(changed&&empty&&!state.pending)state.nextAt=now;
       return changed;
     }
-    case 'tower': return ballChallenge(state,action,now);
     case 'boss': return challenge(state,now);
     case 'upgrade': return buyUpgrade(state,action.id);
     case 'position': {
@@ -4165,29 +4655,37 @@ function applyGameAction(state,action,now){
       state.positions[action.uid]=coords.map(value=>Math.max(8,Math.min(92,Math.round(value))));
       return true;
     }
-    case 'autoFormation': return applySuggestedFormation(state,action,now);
+    case 'autoFormation': return Array.isArray(action.team)?applySuggestedFormation(state,action,now):autoFormation(state,action.mode??'power',now);
     case 'formationPreset': return applyFormationPreset(state,action.preset);
     case 'sell': return sellUnit(state,action.uid)!==false;
     default: return false;
   }
 }
 
-return {AREAS,BOSS,WORLDS,worldOf,levelCap,COLORS,TIERS,spriteFor,CHARACTERS,SKILL_EFFECTS,TRAITS,UPGRADES,xpFor,levelAt,xpProgress,maxLevel,readyForBoss,upgradeLevel,waitFor,buyUpgrade,fresh,slotTraits,loadoutChance,fighter,recruitRates,rollRecruit,SALE_PRICES,RECOVERY_MS,readyAt,makeBattle,saleSettings,advance,AWAY_THRESHOLD,advanceWithPresence,startExploration,towerPrize,raidToday,towerEnemies,challenge,formationSlots,formationCost,equip,unitPower,formationPower,projectedPower,leaderApplies,applyFormationPreset,dexSummary,canSellUnit,duplicateSellCandidates,sellUnit,applyGameAction};
+return {AREAS,BOSS,WORLDS,worldOf,levelCap,COLORS,TIERS,spriteFor,CHARACTERS,SKILL_EFFECTS,TRAITS,UPGRADES,xpFor,levelAt,xpProgress,maxLevel,readyForBoss,upgradeLevel,waitFor,buyUpgrade,fresh,MAX_STARS,TRAIT_PITY_LIMIT,PRESET_SLOTS,PRESET_LABELS,RAID_MILESTONES,WORLD_BOSS_MILESTONES,TOWER_AFFIXES,WEEKLY_TOWER_FLOORS,WEEKLY_TOWER_RULES,grantItems,awakenCost,dexMastery,slotTraits,loadoutChance,fighter,recruitRates,rollRecruit,SALE_PRICES,RECOVERY_MS,readyAt,makeBattle,saleSettings,advance,AWAY_THRESHOLD,AFK_ENCOUNTER_LIMIT,advanceWithPresence,startExploration,TOWER_LIMIT,towerPrize,towerAffix,raidToday,weeklyTowerToday,towerEnemies,weeklyTowerEnemies,challenge,formationSlots,formationCost,equip,unitPower,formationPower,projectedPower,leaderApplies,applyFormationPreset,autoFormation,dexSummary,canSellUnit,duplicateSellCandidates,sellUnit,goldShopPrice,resolveDefenseSquad,applyGameAction};
 })();
 const {serialSchema,issueSerials} =serials;
-const {advance,advanceWithPresence,applyGameAction,fighter,fresh,CHARACTERS} =game;
-const {dailyCycle,DEFAULT_PROFILE,appearancePatch,PROFILE_BODY_LIMIT,GIFT_GOLD} =communityRules;
+const {advance,advanceWithPresence,applyGameAction,fighter,fresh,CHARACTERS,dexMastery,resolveDefenseSquad,WORLD_BOSS_MILESTONES} =game;
+const {dailyCycle,weeklyCycle,arenaLeague,DEFAULT_PROFILE,appearancePatch,PROFILE_BODY_LIMIT,GIFT_GOLD} =communityRules;
 
 class ApiError extends Error {
   constructor(status,message,code){super(message);this.status=status;this.code=code;}
 }
 function reject(status,message,code){throw new ApiError(status,message,code);}
-const BUILD='nexus-namek-56';
+const BUILD='nexus-namek-57';
+const RANKINGS_TTL=15000;
+const rankingsCache=new WeakMap();
+const invalidateRankings=db=>rankingsCache.delete(db);
+const makeToken=()=>btoa(String.fromCharCode(...random(24))).replaceAll('+','-').replaceAll('/','_');
 const schemas=[
   'CREATE TABLE IF NOT EXISTS nexus_links(provider TEXT,subject TEXT,player TEXT NOT NULL,PRIMARY KEY(provider,subject),UNIQUE(provider,player))',
   'CREATE TABLE IF NOT EXISTS nexus_oauth(key TEXT PRIMARY KEY,browser TEXT,provider TEXT,player TEXT,expires INTEGER)',
   'CREATE TABLE IF NOT EXISTS nexus_handoffs(key TEXT PRIMARY KEY,player TEXT NOT NULL,expires INTEGER)',
   'CREATE TABLE IF NOT EXISTS nexus_sessions(key TEXT PRIMARY KEY,player TEXT NOT NULL,expires INTEGER)',
+  'CREATE TABLE IF NOT EXISTS nexus_arena_seasons(player TEXT NOT NULL,season TEXT NOT NULL,claimed INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(player,season))',
+  'CREATE TABLE IF NOT EXISTS nexus_arena_defenses(player TEXT NOT NULL,day TEXT NOT NULL,wins INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(player,day))',
+  'CREATE TABLE IF NOT EXISTS nexus_world_boss(week TEXT PRIMARY KEY,total_damage INTEGER NOT NULL DEFAULT 0)',
+  'CREATE TABLE IF NOT EXISTS nexus_world_boss_contrib(week TEXT NOT NULL,player TEXT NOT NULL,damage INTEGER NOT NULL DEFAULT 0,claimed TEXT NOT NULL DEFAULT \'[]\',PRIMARY KEY(week,player))',
 
   `CREATE TABLE IF NOT EXISTS nexus_arena_matches(
     player TEXT NOT NULL, day TEXT NOT NULL, attempt INTEGER NOT NULL CHECK(attempt BETWEEN 1 AND 5),
@@ -4211,6 +4709,26 @@ const schemas=[
       UPDATE nexus_players SET game=json_set(game,'$.arenaTrophies',
         coalesce(json_extract(game,'$.arenaTrophies'),0)+json_extract(NEW.replay,'$.trophies')),
         revision=revision+1 WHERE id=NEW.player;
+    END`,
+  `CREATE TRIGGER IF NOT EXISTS nexus_arena_defense_credit AFTER INSERT ON nexus_arena_matches
+    WHEN json_extract(NEW.replay,'$.result')='Derrota'
+      AND coalesce((SELECT wins FROM nexus_arena_defenses WHERE player=NEW.rival AND day=NEW.day),0)<3
+    BEGIN
+      UPDATE nexus_players SET game=json_set(game,'$.arenaTrophies',
+        coalesce(json_extract(game,'$.arenaTrophies'),0)+1),revision=revision+1 WHERE id=NEW.rival;
+      INSERT INTO nexus_arena_defenses(player,day,wins) VALUES(NEW.rival,NEW.day,1)
+        ON CONFLICT(player,day) DO UPDATE SET wins=wins+1;
+    END`,
+  `CREATE TRIGGER IF NOT EXISTS nexus_raid_world_credit AFTER UPDATE OF game ON nexus_players
+    WHEN json_type(NEW.game,'$.ballRun.worldBossWeek')='text'
+      AND json_extract(NEW.game,'$.ballRun.sequence')>coalesce(json_extract(OLD.game,'$.ballRun.sequence'),0)
+    BEGIN
+      INSERT INTO nexus_world_boss(week,total_damage)
+        VALUES(json_extract(NEW.game,'$.ballRun.worldBossWeek'),json_extract(NEW.game,'$.ballRun.damage'))
+        ON CONFLICT(week) DO UPDATE SET total_damage=total_damage+excluded.total_damage;
+      INSERT INTO nexus_world_boss_contrib(week,player,damage)
+        VALUES(json_extract(NEW.game,'$.ballRun.worldBossWeek'),NEW.id,json_extract(NEW.game,'$.ballRun.damage'))
+        ON CONFLICT(week,player) DO UPDATE SET damage=damage+excluded.damage;
     END`,
   'CREATE INDEX IF NOT EXISTS nexus_registration ON nexus_players(reg_key)',
   'CREATE INDEX IF NOT EXISTS nexus_power ON nexus_players(power DESC,name,id)',
@@ -4236,7 +4754,7 @@ const schemas=[
   END`
 ];
 const initialized=new WeakSet();
-const SCHEMA_VERSION=1;
+const SCHEMA_VERSION=3;
 async function initialize(db){
   if(initialized.has(db))return;
   let schema;
@@ -4258,14 +4776,14 @@ const hex=bytes=>Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
 const random=count=>crypto.getRandomValues(new Uint8Array(count));
 const hash=async value=>hex(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))));
 const publicPlayer=({id,name,code})=>({id,name,code});
-function summarize(unit){
-  const stats=fighter(unit);
+function summarize(unit,mastery=null){
+  const stats=fighter(unit,undefined,null,false,mastery);
   const power=['hp','attack','magic','defense','resistance','speed'].reduce((sum,k)=>sum+stats[k],0);
-  return {id:unit.id,xp:unit.xp,name:CHARACTERS[unit.id].name,level:stats.level,shiny:unit.shiny,
+  return {id:unit.id,xp:unit.xp,stars:unit.stars??0,name:CHARACTERS[unit.id].name,level:stats.level,shiny:unit.shiny,
     trait:unit.trait,traitSlots:unit.traitSlots,activeSlot:unit.activeSlot,nen:unit.nen===true,serial:unit.serial,odds:unit.odds,power};
 }
-function rankedUnits(collection){
-  const units=collection.map(summarize);
+function rankedUnits(collection,mastery=null){
+  const units=collection.map(u=>summarize(u,mastery));
   const rarity=(a,b)=>(b.odds??0)-(a.odds??0)||a.name.localeCompare(b.name)||a.serial-b.serial;
   const rare=units.filter(u=>u.odds>0).sort(rarity).slice(0,30);
   const top=units.sort((a,b)=>b.power-a.power||rarity(a,b)).slice(0,4);
@@ -4276,23 +4794,29 @@ async function register(db,input,request){
   if(!/^[\p{L}\p{N} _.-]{2,24}$/u.test(name))reject(400,'Use de 2 a 24 letras ou números no nome.');
   const now=Date.now();
   const regKey=await hash(Math.floor(now/3600000)+'/'+(request.headers.get('CF-Connecting-IP')??'local'));
-  const token=btoa(String.fromCharCode(...random(24))).replaceAll('+','-').replaceAll('/','_');
-  const state=fresh(now,crypto.getRandomValues(new Uint32Array(1))[0]);
+  const token=makeToken();
+  const state=fresh(now,hex(random(32)));
   const tokenHash=await hash(token);
   const id=crypto.randomUUID();
   for(let attempt=0;attempt<3;attempt++){
     const counter=await db.prepare('SELECT * FROM nexus_serials WHERE id=1').first();
     issueSerials(state,state.collection,counter);
-    const ranks=rankedUnits(state.collection);
+    const ranks=rankedUnits(state.collection,dexMastery(state));
     const code=hex(random(5)).toUpperCase();
     const inserted=await db.prepare(`INSERT INTO nexus_players(id,code,token_hash,name,game,appearance,reg_key,power,top_units,rare_units)
       SELECT ?,?,?,?,?,?,?,?,?,? WHERE (SELECT revision FROM nexus_serials WHERE id=1)=? AND (SELECT count(*) FROM nexus_players WHERE reg_key=?)<20
       ON CONFLICT(code) DO NOTHING RETURNING id`).bind(id,code,tokenHash,name,JSON.stringify(state),JSON.stringify(DEFAULT_PROFILE),regKey,...ranks,counter.revision,regKey).first();
-    if(inserted)return {token,player:{id,name,code}};
+    if(inserted){invalidateRankings(db);return {token,player:{id,name,code}};}
     const count=await db.prepare('SELECT count(*) AS n FROM nexus_players WHERE reg_key=?').bind(regKey).first();
     if(count.n>=20)reject(429,'Limite temporário de criação de contas atingido.');
   }
   reject(503,'Tente criar o perfil novamente.','REGISTRATION_CONTENTION');
+}
+async function rotateToken(db,id){
+  const token=makeToken();
+  const result=await db.prepare('UPDATE nexus_players SET token_hash=? WHERE id=?').bind(await hash(token),id).run();
+  if(!result.meta.changes)reject(404,'Jogador não encontrado.');
+  return {token};
 }
 const providers = {
   google:{authorize:'https://accounts.google.com/o/oauth2/v2/auth',exchange:'https://oauth2.googleapis.com/token',user:'https://openidconnect.googleapis.com/v1/userinfo',scope:'openid'},
@@ -4392,18 +4916,21 @@ async function sync(db,id,body){
   if(!partial&&body.action?.type==='autoFormation'&&!Array.isArray(body.action.team))
     reject(409,'Atualize a página para usar a formação automática.','CLIENT_UPDATE_REQUIRED');
   const changed=!partial&&applyGameAction(state,body.action,now);
+  if(changed&&body.action.type==='raid'&&state.ballRun?.damage>0)
+    state.ballRun.worldBossWeek=weeklyCycle(now).week;
   if(changed)entries.push(...advance(state,now));
   const units=entries.map(e=>e.recruit||e.sold).filter(Boolean);
   const counter=units.length?await db.prepare('SELECT * FROM nexus_serials WHERE id=1').first():null;
   issueSerials(state,units,counter);
   const delta=now-(row.last_seen??now);
   const played=delta>0&&delta<=20000?delta:0;
-  const ranks=JSON.stringify(state.collection)===previousCollection?[]:rankedUnits(state.collection);
+  const ranks=JSON.stringify(state.collection)===previousCollection?[]:rankedUnits(state.collection,dexMastery(state));
   const rankFields=ranks.length?'power=?,top_units=?,rare_units=?,':'';
   const result=await db.prepare(`UPDATE nexus_players SET game=?,play_ms=play_ms+?,last_seen=?,
     ${rankFields}revision=revision+1 WHERE id=? AND revision=? AND (? IS NULL OR (SELECT revision FROM nexus_serials WHERE id=1)=?)`)
     .bind(JSON.stringify(state),played,body.visible===true?now:null,...ranks,id,row.revision,counter?.revision??null,counter?.revision??null).run();
   if(!result.meta.changes)reject(409,'A campanha está sendo atualizada. Tente novamente.','SYNC_CONTENTION');
+  if(changed||entries.length)invalidateRankings(db);
   if(partial){
     if(body.checkpoints!==true)reject(409,'Atualize a página para continuar a recuperação da campanha.','CLIENT_UPDATE_REQUIRED');
     const awayLimit=(state.awayWindow?.start??state.clock)+12*3600000;
@@ -4439,14 +4966,27 @@ async function arenaOpponents(db,id){
   return {own,opponents:squads.filter(p=>p.id!==id && p.team.length).sort((a,b)=>Math.abs(a.power-own)-Math.abs(b.power-own)).slice(0,3)};
 }
 async function rankedStatus(db,id,day=dailyCycle().day){
-  return db.prepare(`SELECT ? AS day, COUNT(CASE WHEN day=? THEN 1 END) AS used,
-    COALESCE(SUM(delta),0) AS points FROM nexus_arena_matches WHERE player=?`).bind(day,day,id).first();
+  const {week,prevWeek,nextAt}=weeklyCycle();
+  const [cur,prev,claimed]=await db.batch([
+    db.prepare(`SELECT ? AS day, COUNT(CASE WHEN day=? THEN 1 END) AS used,
+      COALESCE(SUM(CASE WHEN day>=? THEN delta ELSE 0 END),0) AS points,
+      COALESCE(SUM(delta),0) AS allTimePoints FROM nexus_arena_matches WHERE player=?`).bind(day,day,week,id),
+    db.prepare(`SELECT COUNT(*) AS matches, COALESCE(SUM(delta),0) AS points FROM nexus_arena_matches
+      WHERE player=? AND day>=? AND day<?`).bind(id,prevWeek,week),
+    db.prepare('SELECT 1 AS ok FROM nexus_arena_seasons WHERE player=? AND season=?').bind(id,prevWeek)
+  ]);
+  const s=cur.results[0];
+  const prevRow=prev.results[0];
+  const prevClaimable=prevRow.matches>0&&!claimed.results.length?{season:prevWeek,points:prevRow.points,league:arenaLeague(prevRow.points)}:null;
+  return {...s,season:week,seasonNextAt:nextAt,league:arenaLeague(s.points),prevSeason:prevClaimable};
 }
-function rankedTeam(row){
+function rankedTeam(row,asDefender=false){
   const state=JSON.parse(row.game);
-  const units=state.team.map(uid=>state.collection.find(u=>u.uid===uid)).filter(Boolean);
-  const captain=CHARACTERS[units.find(u=>u.uid===state.leader)?.id];
-  return {fighters:units.map(u=>fighter(u,state.positions?.[u.uid],captain,true)),
+  const mastery=dexMastery(state);
+  const squad=asDefender?resolveDefenseSquad(state):{team:state.team,leader:state.leader,positions:state.positions};
+  const units=squad.team.map(uid=>state.collection.find(u=>u.uid===uid)).filter(Boolean);
+  const captain=CHARACTERS[units.find(u=>u.uid===squad.leader)?.id];
+  return {fighters:units.map(u=>fighter(u,squad.positions?.[u.uid],captain,true,mastery)),
     power:units.reduce((sum,u)=>sum+game.unitPower(u,captain),0)};
 }
 function winTrophies(result,ownPower,rivalPower){
@@ -4467,16 +5007,29 @@ async function rankedMatch(db,id,{day,attempt}){
   if(previous)return receipt(previous);
   const status=await rankedStatus(db,id,day);
   if(attempt!==status.used+1)reject(409,'Atualize as tentativas da Arena.');
-  const own=rankedTeam(await db.prepare('SELECT game FROM nexus_players WHERE id=?').bind(id).first());
+  const own=rankedTeam(await db.prepare('SELECT game FROM nexus_players WHERE id=?').bind(id).first(),false);
   if(!own.power)reject(409,'Monte sua formação antes de entrar na ranqueada.');
-  const rival=await db.prepare(`SELECT id,name,game FROM nexus_players WHERE id<>? AND json_array_length(game,'$.team')>0
-    AND id NOT IN (SELECT rival FROM nexus_arena_matches WHERE player=? AND day=?) ORDER BY RANDOM() LIMIT 1`).bind(id,id,day).first();
+  // Fair bracket matchmaking: shortlist closest power candidates first, then pick randomly inside ±25% (or ±50%, then closest).
+  const pool=(await db.prepare(`SELECT id,name,power,game FROM nexus_players WHERE id<>? AND json_array_length(game,'$.team')>0
+    AND id NOT IN (SELECT rival FROM nexus_arena_matches WHERE player=? AND day=?)
+    ORDER BY abs(power-?) LIMIT 20`).bind(id,id,day,own.power).all()).results;
+  let rival=null;
+  if(pool.length){
+    const scored=pool.map(r=>({row:r,team:rankedTeam(r,true)})).filter(x=>x.team.power>0);
+    const tight=scored.filter(x=>Math.abs(x.team.power-own.power)<=own.power*0.25);
+    const mid=scored.filter(x=>Math.abs(x.team.power-own.power)<=own.power*0.50);
+    const bucket=tight.length?tight:mid.length?mid:scored.slice(0,5);
+    if(bucket.length){
+      const pick=bucket[random(1)[0]%bucket.length];
+      rival={...pick.row,_team:pick.team};
+    }
+  }
   if(!rival){
     const concurrent=await saved.first();
     if(concurrent)return receipt(concurrent);
     reject(409,'Sem adversários disponíveis. Cada jogador pode ser sorteado uma vez por ciclo.');
   }
-  const other=rankedTeam(rival);
+  const other=rival._team;
   const run={physics:4,ranked:true,rivalName:rival.name,left:own.fighters,right:other.fighters,limit:120};
   const match=duelEngine.finishDuel(duelEngine.createDuel(run.left,run.right,run.limit));
   run.result=match.result;
@@ -4484,20 +5037,97 @@ async function rankedMatch(db,id,{day,attempt}){
   const difference=Math.max(-.38,Math.min(.38,other.power/own.power-1));
   run.trophies=winTrophies(run.result,own.power,other.power);
   run.delta=run.result==='Vitória'?Math.round(20+50*difference):run.result==='Derrota'?-Math.round(10-25*difference):0;
-  await db.prepare('INSERT OR IGNORE INTO nexus_arena_matches(player,day,attempt,rival,delta,replay) VALUES(?,?,?,?,?,?)')
+  const ins=await db.prepare('INSERT OR IGNORE INTO nexus_arena_matches(player,day,attempt,rival,delta,replay) VALUES(?,?,?,?,?,?)')
     .bind(id,day,attempt,rival.id,run.delta,JSON.stringify(run)).run();
+  if(ins.meta.changes)invalidateRankings(db);
   const row=await saved.first();
   if(!row)reject(409,'As tentativas mudaram. Atualize a Arena.');
   return receipt(row);
 }
+async function arenaLog(db,id){
+  const [attacks,defenses]=await db.batch([
+    db.prepare(`SELECT m.day,m.attempt,m.delta,json_extract(m.replay,'$.result') AS result,
+      json_extract(m.replay,'$.trophies') AS trophies,p.id AS rivalId,p.name AS rivalName
+      FROM nexus_arena_matches m JOIN nexus_players p ON p.id=m.rival
+      WHERE m.player=? ORDER BY m.day DESC,m.attempt DESC LIMIT 10`).bind(id),
+    db.prepare(`SELECT m.day,m.attempt,m.delta,json_extract(m.replay,'$.result') AS attackerResult,
+      p.id AS attackerId,p.name AS attackerName
+      FROM nexus_arena_matches m JOIN nexus_players p ON p.id=m.player
+      WHERE m.rival=? ORDER BY m.day DESC,m.attempt DESC LIMIT 10`).bind(id)
+  ]);
+  return {
+    attacks:attacks.results,
+    defenses:defenses.results.map(d=>({...d,defended:d.attackerResult==='Derrota'}))
+  };
+}
+// Reward the latest save in the same D1 transaction that records the claim.
+function creditReward(db,id,bundles,condition,params){
+  const items={};
+  let gold=0,tokens=0,trophies=0;
+  for(const bundle of bundles){
+    gold+=bundle.gold??0;
+    tokens+=bundle.traitItems??0;
+    trophies+=bundle.arenaTrophies??0;
+    for(const [key,count] of Object.entries(bundle.items??{}))items[key]=(items[key]??0)+count;
+  }
+  const fields=[['$.gold',gold],['$.traitItems',tokens],['$.arenaTrophies',trophies],
+    ...Object.entries(items).map(([key,count])=>['$.items.'+key,count])].filter(([,count])=>count>0);
+  const assignments=fields.map(()=> '?,coalesce(json_extract(game,?),0)+?').join(',');
+  return db.prepare(`UPDATE nexus_players SET game=json_set(game,${assignments}),revision=revision+1 WHERE id=? AND ${condition}`)
+    .bind(...fields.flatMap(([key,count])=>[key,key,count]),id,...params);
+}
+async function claimArenaSeason(db,id){
+  const {week,prevWeek}=weeklyCycle();
+  const prev=await db.prepare('SELECT COUNT(*) AS matches,COALESCE(SUM(delta),0) AS points FROM nexus_arena_matches WHERE player=? AND day>=? AND day<?').bind(id,prevWeek,week).first();
+  if(!prev?.matches)reject(400,'Você não disputou partidas ranqueadas na temporada anterior.');
+  const league=arenaLeague(prev.points);
+  const reward={arenaTrophies:league.reward.trophies,traitItems:league.reward.tokens,items:{essence:league.reward.essence}};
+  const [credited]=await db.batch([
+    creditReward(db,id,[reward],'NOT EXISTS(SELECT 1 FROM nexus_arena_seasons WHERE player=? AND season=?)',[id,prevWeek]),
+    db.prepare('INSERT OR IGNORE INTO nexus_arena_seasons(player,season,claimed) SELECT ?,?,1 WHERE changes()=1').bind(id,prevWeek)
+  ]);
+  if(!credited.meta.changes)reject(409,'Recompensa da temporada anterior já resgatada.');
+  return {season:prevWeek,league,reward:league.reward};
+}
+async function worldBossStatus(db,id){
+  const {week,nextAt}=weeklyCycle();
+  const [boss,mine,top]=await db.batch([
+    db.prepare('SELECT total_damage FROM nexus_world_boss WHERE week=?').bind(week),
+    db.prepare('SELECT damage,claimed FROM nexus_world_boss_contrib WHERE week=? AND player=?').bind(week,id),
+    db.prepare(`SELECT c.player AS id,p.name,c.damage AS score FROM nexus_world_boss_contrib c
+      JOIN nexus_players p ON p.id=c.player WHERE c.week=? ORDER BY c.damage DESC,p.id LIMIT 10`).bind(week)
+  ]);
+  const totalDamage=boss.results[0]?.total_damage??0;
+  const myDamage=mine.results[0]?.damage??0;
+  const claimed=JSON.parse(mine.results[0]?.claimed??'[]');
+  return {week,nextAt,totalDamage,myDamage,claimed,milestones:WORLD_BOSS_MILESTONES,top:top.results};
+}
+async function claimWorldBoss(db,id){
+  const status=await worldBossStatus(db,id);
+  const {week}=status;
+  if(status.myDamage<=0)reject(400,'Participe de pelo menos uma Raid nesta semana para resgatar.');
+  const newly=WORLD_BOSS_MILESTONES.filter(m=>status.totalDamage>=m.damage&&!status.claimed.includes(m.damage));
+  if(!newly.length)reject(409,'Nenhum novo marco global disponível para resgate.');
+  const previous=JSON.stringify(status.claimed);
+  const next=JSON.stringify([...status.claimed,...newly.map(m=>m.damage)]);
+  const [credited]=await db.batch([
+    creditReward(db,id,newly,'EXISTS(SELECT 1 FROM nexus_world_boss_contrib WHERE week=? AND player=? AND claimed=?)',[week,id,previous]),
+    db.prepare('UPDATE nexus_world_boss_contrib SET claimed=? WHERE week=? AND player=? AND claimed=? AND changes()=1').bind(next,week,id,previous)
+  ]);
+  if(!credited.meta.changes)reject(409,'Tente resgatar novamente.');
+  return {claimed:newly.map(m=>m.label),status:await worldBossStatus(db,id)};
+}
 function scoreBoard(db,kind,limit){
+  const {week}=weeklyCycle();
   const sql=kind==='tower'?`SELECT id,name,json_extract(game,'$.towerCleared') AS score FROM nexus_players
       WHERE score>0 ORDER BY score DESC,id LIMIT ?`:
     `SELECT p.id,p.name,SUM(m.delta) AS score FROM nexus_arena_matches m
-      JOIN nexus_players p ON p.id=m.player GROUP BY p.id,p.name ORDER BY score DESC,p.name,p.id LIMIT ?`;
-  return db.prepare(sql).bind(limit);
+      JOIN nexus_players p ON p.id=m.player WHERE m.day>=? GROUP BY p.id,p.name ORDER BY score DESC,p.name,p.id LIMIT ?`;
+  return kind==='tower'?db.prepare(sql).bind(limit):db.prepare(sql).bind(week,limit);
 }
 async function rankings(db){
+  const now=Date.now(),cached=rankingsCache.get(db);
+  if(cached&&now-cached.at<RANKINGS_TTL)return cached.data;
   const [power,rarity,raid,tower,arena]=await db.batch([
     db.prepare('SELECT id,name,power,top_units FROM nexus_players ORDER BY power DESC,name,id LIMIT 30'),
     db.prepare(`SELECT p.id,p.name,u.value AS unit FROM nexus_players p,json_each(p.rare_units) u
@@ -4506,8 +5136,10 @@ async function rankings(db){
       WHERE json_extract(game,'$.raid.day')=? AND score>0 ORDER BY score DESC,id LIMIT 30`).bind(dailyCycle().day),
     scoreBoard(db,'tower',30),scoreBoard(db,'arena',30)
   ]);
-  return {arena:arena.results,raid:raid.results,tower:tower.results,power:power.results.map(({id,name,power,top_units})=>({player:{id,name},power,units:JSON.parse(top_units)})),
+  const data={arena:arena.results.map(r=>({...r,league:arenaLeague(r.score).name})),raid:raid.results,tower:tower.results,power:power.results.map(({id,name,power,top_units})=>({player:{id,name},power,units:JSON.parse(top_units)})),
     rarity:rarity.results.map(({id,name,unit})=>({...JSON.parse(unit),player:{id,name}}))};
+  rankingsCache.set(db,{at:now,data});
+  return data;
 }
 const pair=(a,b)=>a<b?[a,b]:[b,a];
 async function friends(db,id){
@@ -4615,6 +5247,8 @@ export default {
         if(path==='/api/community/friends')return json(await friends(db,id));
         if(path==='/api/community/ranked')return json(await rankedStatus(db,id));
         if(path==='/api/community/arena')return json(await arenaOpponents(db,id));
+        if(path==='/api/community/arena-log')return json(await arenaLog(db,id));
+        if(path==='/api/community/world-boss')return json(await worldBossStatus(db,id));
         if(path==='/api/community/top/tower'||path==='/api/community/top/arena')
           return json({rows:(await scoreBoard(db,path.endsWith('/tower')?'tower':'arena',10).all()).results});
         if(path==='/api/community/rankings')return json(await rankings(db));
@@ -4625,6 +5259,9 @@ export default {
           await db.prepare('DELETE FROM nexus_sessions WHERE key=? AND player=?').bind(await hash(token),id).run();
           return json({});
         }
+        if(path==='/api/community/rotate-token')return json(await rotateToken(db,id));
+        if(path==='/api/community/arena-season-claim')return json(await claimArenaSeason(db,id));
+        if(path==='/api/community/world-boss/claim')return json(await claimWorldBoss(db,id));
         if(path==='/api/community/ranked')return json(await rankedMatch(db,id,body));
         if(path==='/api/game')return json(await sync(db,id,body));
         if(path==='/api/community/profile'){
